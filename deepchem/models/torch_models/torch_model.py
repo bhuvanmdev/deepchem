@@ -1290,5 +1290,203 @@ class _StandardLoss(object):
         loss = losses * w
         loss = loss.mean()
         if self.model.regularization_loss is not None:
-            loss += self.model.regularization_loss()
+            loss += self.model.regularization_loss()    
         return loss
+
+
+# import torch
+# import pytorch_lightning as pl
+# from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+# from torch.distributed.fsdp import MixedPrecision
+# from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+
+# class LightningTorchModel(pl.LightningModule, TorchModel):
+#     def __init__(self, *args, **kwargs):
+#         # Initialize both parent classes
+#         pl.LightningModule.__init__(self)
+#         TorchModel.__init__(self, *args, **kwargs)
+        
+#         # FSDP-specific settings can be stored here
+#         self.fsdp_config = kwargs.get('fsdp_config', {})
+    
+#     # Implement the required Lightning hooks
+#     def training_step(self, batch, batch_idx):
+#         # Prepare batch using your existing method
+#         x, y = self._prepare_batch(batch)
+#         # Assuming your model has a loss method
+#         loss = self.compute_loss(x, y)
+#         self.log('train_loss', loss)
+#         return loss
+    
+#     def validation_step(self, batch, batch_idx):
+#         x, y = self._prepare_batch(batch)
+#         loss = self.compute_loss(x, y)
+#         self.log('val_loss', loss)
+#         return loss
+    
+#     def configure_optimizers(self):
+#         # Use your existing optimizer settings
+#         optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
+#         return optimizer
+    
+#     # Forward method delegates to the TorchModel implementation
+#     def forward(self, x):
+#         return TorchModel.forward(self, x)
+    
+#     # Map your existing prediction methods to Lightning style
+#     def predict_step(self, batch, batch_idx):
+#         x, _ = self._prepare_batch(batch)
+#         return self.predict_on_batch(x)
+    
+#     def predict_uncertainty(self, data, **kwargs):
+#             # You can call your existing method directly
+#         return TorchModel.predict_uncertainty(self, data, **kwargs)
+
+#     def predict_embedding(self, data, **kwargs):
+#         return TorchModel.predict_embedding(self, data, **kwargs)
+
+#     def compute_saliency(self, data, **kwargs):
+#         return TorchModel.compute_saliency(self, data, **kwargs)
+
+#     # For methods that might need a batch-by-batch approach with Lightning
+#     def evaluate_generator(self, data_gen, **kwargs):
+#         # Either delegate to the original method
+#         return TorchModel.evaluate_generator(self, data_gen, **kwargs)
+    
+
+# def get_fsdp_strategy(precision="bf16-mixed"):
+#     """Configure the FSDP strategy with appropriate settings."""
+    
+#     # Define mixed precision policy
+#     if precision == "bf16-mixed":
+#         mp_policy = MixedPrecision(
+#             param_dtype=torch.bfloat16,
+#             reduce_dtype=torch.bfloat16,
+#             buffer_dtype=torch.bfloat16,
+#         )
+#     elif precision == "fp16-mixed":
+#         mp_policy = MixedPrecision(
+#             param_dtype=torch.float16,
+#             reduce_dtype=torch.float16,
+#             buffer_dtype=torch.float16,
+#         )
+#     else:
+#         mp_policy = None
+
+#     # Create auto_wrap_policy if your model has transformer components
+#     # Adjust the import and target classes based on your model architecture
+#     # try:
+#     #     from your_model_module import TransformerBlock  # replace with your transformer class
+#     #     wrap_policy = transformer_auto_wrap_policy(transformer_layer_cls={TransformerBlock})
+#     # except ImportError:
+#     wrap_policy = None
+
+#     # Return the FSDP strategy
+#     return pl.strategies.FSDPStrategy(
+#         auto_wrap_policy=wrap_policy,
+#         mixed_precision=mp_policy,
+#         activation_checkpointing=None,  # Set to your transformer blocks if needed
+#         sharding_strategy="FULL_SHARD",  # Other options: SHARD_GRAD_OP, HYBRID_SHARD
+#         state_dict_type="full",  # For easier checkpointing
+#         cpu_offload=False,  # Set to True if GPU memory is limited
+#         limit_all_gathers=True,  # Memory efficiency setting
+#     )
+
+
+# def train_with_fsdp(model_cls, model_args, train_data, val_data, **kwargs):
+#     """
+#     Train a model using FSDP.
+    
+#     Args:
+#         model_cls: Your model class that inherits from TorchModel
+#         model_args: Arguments to pass to your model constructor
+#         train_data: Training data
+#         val_data: Validation data
+#         **kwargs: Additional arguments
+#     """
+#     # Create a model instance
+#     base_model = model_cls(**model_args)
+    
+#     # Wrap it with our Lightning wrapper
+#     lightning_model = LightningTorchModel.from_torch_model(base_model)
+    
+#     # Create data module
+#     data_module = TorchModel(
+#         lightning_model,
+#         train_data=train_data,
+#         val_data=val_data,
+#         batch_size=kwargs.get('batch_size', 32)
+#     )
+    
+#     # Configure FSDP strategy
+#     fsdp_strategy = get_fsdp_strategy(precision=kwargs.get('precision', 'bf16-mixed'))
+    
+#     # Create trainer
+#     trainer = pl.Trainer(
+#         max_epochs=kwargs.get('max_epochs', 10),
+#         strategy=fsdp_strategy,
+#         accelerator="gpu",
+#         devices=kwargs.get('num_gpus', -1),  # -1 uses all available GPUs
+#         precision=kwargs.get('precision', '16-mixed'),
+#         logger=pl.loggers.TensorBoardLogger(kwargs.get('log_dir', 'lightning_logs')),
+#         callbacks=[
+#             pl.callbacks.ModelCheckpoint(
+#                 dirpath=kwargs.get('ckpt_dir', 'checkpoints'),
+#                 filename='{epoch}-{val_loss:.2f}',
+#                 save_top_k=3,
+#                 monitor='val_loss'
+#             ),
+#             pl.callbacks.LearningRateMonitor(),
+#         ]
+#     )
+    
+#     # Train the model
+#     trainer.fit(lightning_model, datamodule=data_module)
+    
+#     return trainer, lightning_model
+
+
+# # Add this to the LightningTorchModel class
+# @classmethod
+# def from_torch_model(cls, torch_model):
+#     """Convert an existing TorchModel instance to a LightningTorchModel."""
+#     lightning_model = cls()
+    
+#     # Copy all attributes from the torch model
+#     for key, value in torch_model.__dict__.items():
+#         setattr(lightning_model, key, value)
+    
+#     # Copy all parameters/buffers if needed
+#     lightning_model.load_state_dict(torch_model.state_dict())
+    
+#     return lightning_model
+
+# # Example usage
+# if __name__ == "__main__":
+#     # Create your model as usual
+#     from your_models import YourCustomModel
+    
+#     # Initialize your model
+#     model = YourCustomModel(input_dim=128, hidden_dim=256)
+    
+#     # Prepare data
+#     train_data = your_data_loading_function()
+#     val_data = your_validation_data_function()
+    
+#     # Train with FSDP
+#     trainer, lightning_model = train_with_fsdp(
+#         model_cls=YourCustomModel,
+#         model_args={'input_dim': 128, 'hidden_dim': 256},
+#         train_data=train_data,
+#         val_data=val_data,
+#         batch_size=64,
+#         max_epochs=20,
+#         num_gpus=4,
+#         precision='bf16-mixed'
+#     )
+    
+#     # After training, you can still use all your original methods
+#     results = lightning_model.predict_uncertainty(test_data)
+    
+#     # Or save the model for later use
+#     trainer.save_checkpoint("final_model.ckpt")
