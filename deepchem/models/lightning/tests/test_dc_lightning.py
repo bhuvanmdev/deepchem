@@ -118,57 +118,6 @@ def test_gcn_model():
     predictions = trainer.predict(valid_dataset)
     print(predictions[0])
 
-# @pytest.mark.pyl
-# def test_weave_model():
-#     np.random.seed(22)
-#     torch.manual_seed(22)
-#     featurizer = WeaveFeaturizer()
-#     tasks, all_dataset, transformers = dc.molnet.load_delaney(featurizer)
-#     train_dataset, valid_dataset, test_dataset = all_dataset
-
-#     # valid_dataset = deepchem.deepchem.data. valid_dataset.X[:20],valid_dataset.y[:20],valid_dataset.w[:20],valid_dataset.ids[:20]
-#     batch_size = 2
-#     weave_model = WeaveModel(len(tasks),
-#                              batch_size=batch_size,
-#                              mode='regression',
-#                              dropouts=0,
-#                              learning_rate=0.0003,
-#                              device="cpu")
-#     trainer = DeepChemLightningTrainer(
-#         model=weave_model,
-#         batch_size=batch_size,
-#         max_epochs=10,
-#         accelerator="cuda",
-#         devices=-1,
-#         log_every_n_steps=1,
-#         strategy="fsdp",
-#     )
-#     trainer.fit(test_dataset)
-#     trainer.save_checkpoint("weave_model.ckpt")
-
-#     # Reload model and checkpoint
-#     weave_model = WeaveModel(len(tasks),
-#                              batch_size=batch_size,
-#                              mode='regression',
-#                              dropouts=0,
-#                              learning_rate=0.0003,
-#                              device="cpu")
-    
-#     trainer = DeepChemLightningTrainer(
-#         model=weave_model,
-#         batch_size=batch_size,
-#         max_epochs=10,
-#         accelerator="cuda",
-#         devices=-1,
-#         log_every_n_steps=1,
-#         strategy="fsdp",
-#         fast_dev_run=True
-#     )
-    
-#     trainer.load_checkpoint("weave_model.ckpt")
-#     predictions = trainer.predict(valid_dataset)
-#     print(predictions[0])
-
 @pytest.mark.pyl
 def load_hyperparam_from_ckpt():
     tasks, datasets, _ = dc.molnet.load_clintox()
