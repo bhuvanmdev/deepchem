@@ -119,7 +119,7 @@ def test_gcn_model():
     print(predictions[0])
 
 @pytest.mark.pyl
-def load_hyperparam_from_ckpt():
+def test_load_hyperparam_from_ckpt():
     tasks, datasets, _ = dc.molnet.load_clintox()
     _, valid_dataset, _ = datasets
     print(f"Number of tasks: {len(tasks)} and number of samples: {len(valid_dataset)}")
