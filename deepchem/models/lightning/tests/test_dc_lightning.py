@@ -169,4 +169,54 @@ def test_weave_model():
     predictions = trainer.predict(valid_dataset)
     print(predictions[0])
 
-test_weave_model()
+@pytest.mark.pyl
+def load_hyperparam_from_ckpt():
+    tasks, datasets, _ = dc.molnet.load_clintox()
+    _, valid_dataset, _ = datasets
+    print(f"Number of tasks: {len(tasks)} and number of samples: {len(valid_dataset)}")
+    
+    model = dc.models.MultitaskClassifier(
+        n_tasks=len(tasks),
+        n_features=1024,
+        layer_sizes=[1000],
+        dropouts=0.2,
+        learning_rate=0.0001,
+        device="cpu",
+        batch_size=16
+    )
+    
+    trainer = DeepChemLightningTrainer(
+        model=model,
+        batch_size=16,
+        max_epochs=1,
+        accelerator="cuda",
+        devices=-1,
+        log_every_n_steps=1,
+        strategy="fsdp",
+        # fast_dev_run=True
+    )
+    
+    trainer.fit(valid_dataset)
+    trainer.save_checkpoint("multitask_classifier.ckpt")
+
+    # Reload model and checkpoint
+    model = dc.models.MultitaskClassifier(
+        n_tasks=len(tasks),
+        n_features=1024,
+        layer_sizes=[1000],
+        dropouts=0.2,
+        learning_rate=0.001,
+        device="cpu",
+        batch_size=16
+    )
+    trainer = DeepChemLightningTrainer(
+        model=model,
+        batch_size=16,
+        max_epochs=1,
+        accelerator="cuda",
+        devices=-1,
+        log_every_n_steps=1,
+        strategy="fsdp",
+    )
+    trainer.load_checkpoint("multitask_classifier.ckpt")
+    assert 0.0001 == trainer.model.learning_rate, "Learning rate should be 0.0001"
