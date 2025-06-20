@@ -2634,14 +2634,63 @@ class DiskDataset(Dataset):
         return total
 
     def _cumulative_sum(self) -> List[int]:
-        """Finds the cumulative sizes of the shards."""
+        """Internal helper method to calculate cumulative shard sizes.
+
+        This method iterates through all shards once to determine their sizes
+        (number of samples) and computes the cumulative sum. The resulting list
+        is cached and used by `__getitem__` to quickly map a global sample index
+        to a specific shard and a local index within that shard.
+
+        For example, if shard sizes are `[1000, 1000, 500]`, this method
+        will return `[1000, 2000, 2500]`. This allows `__getitem__` to use a
+        fast binary search (O(log N) where N is the number of shards) to
+        locate the correct shard for any given index, which is significantly
+        more efficient than a linear scan.
+
+        Returns
+        -------
+        List[int]
+            A list where element `i` is the sum of the number of samples in
+            shards 0 through `i`.
+        """
         self._shard_sizes = [self._get_shard_shape(i)[0][0] for i in range(self.get_number_shards())]
         current_sum = 0
-        cumulative_sums = [(current_sum := current_sum + size) for size in self._shard_sizes]
+        cumulative_sums = [0]+[(current_sum := current_sum + size) for size in self._shard_sizes]
         return cumulative_sums
 
     def __getitem__(self, index: int):
-        """Retrieves the sample at the given index."""
+        """Enables random-access lookup of a single sample by its index.
+
+        This method allows the dataset to be indexed like a standard Python
+        list (e.g., `dataset[i]`), returning the i-th sample from across all
+        shards. It uses a pre-computed list of cumulative shard sizes to
+        efficiently locate the correct shard on disk, loads that shard into
+        memory, and returns the specific sample.
+
+        Rationale
+        ---------
+        This method provides compatibility with PyTorch's `torch.utils.data.Dataset`
+        and `DataLoader`. Standard PyTorch `DataLoader` objects are optimized
+        for map-style datasets that implement `__len__` and `__getitem__`.
+
+        While `DiskDataset`'s native iterator-based methods (like `iterbatches`)
+        are highly efficient for sequential access, they can cause instability
+        or deadlocks in complex multi-process data loading scenarios, such as
+        multi-GPU training with PyTorch Lightning's FSDP strategy. By
+        implementing `__getitem__`, `DiskDataset` can be wrapped directly by
+        a standard `DataLoader`, providing a more robust and stable data
+        pipeline for distributed training environments.
+
+        Parameters
+        ----------
+        index: int
+            The global index of the sample to retrieve.
+
+        Returns
+        -------
+        Tuple
+            A tuple `(X, y, w, ids)` containing the data for the requested sample.
+        """
         if not self._have_cumulative_sums:
             self._have_cumulative_sums = True
             self._cumulative_sums = self._cumulative_sum()
