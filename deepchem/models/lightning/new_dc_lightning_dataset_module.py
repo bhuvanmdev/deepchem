@@ -26,7 +26,7 @@ class DeepChemLightningDataModule(L.LightningDataModule):
     ):
         super().__init__()
         self._batch_size = batch_size
-        self._dataset = IndexDatasetWrapper(dataset)
+        self._dataset = IndexDiskDatasetWrapper(dataset)
         self._model = model
         
         if collate_fn is None and model is not None:
