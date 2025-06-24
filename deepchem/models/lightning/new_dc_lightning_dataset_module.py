@@ -3,18 +3,23 @@ import lightning as L
 import deepchem as dc
 from typing import Optional,Callable
 from deepchem.models.lightning.utils import collate_dataset_wrapper, IndexDiskDatasetWrapper
+from deepchem.models.torch_models import TorchModel
 
 
 class DeepChemLightningDataModule(L.LightningDataModule):
     """
-    Lightning DataModule for DeepChem datasets.
-    
-    Args:
-        dataset: DeepChem dataset for training
-        batch_size: Batch size for training
-        collate_fn: Custom collate function (default: collate_dataset_wrapper)
-        num_workers: Number of workers for DataLoader
-        model: DeepChem model for collate function
+    A PyTorch Lightning DataModule for DeepChem datasets.
+
+    This DataModule integrates DeepChem dataset handling with PyTorch Lightning’s streamlined
+    data loading and preprocessing pipeline. It wraps a DeepChem dataset (like `IndexDiskDatasetWrapper`)
+    and configures DataLoaders for training (fit) and prediction (inference) stages. The design supports
+    a customizable collate function to ensure that data is properly formatted for consumption by DeepChem
+    models. If a DeepChem model is provided and no collate function is specified, it defaults to using a 
+    collate function (e.g. `collate_dataset_wrapper`) associated with the model, enabling specialized 
+    processing of inputs.
+
+    For more information, see:
+      - PyTorch Lightning DataModule Documentation: https://www.pytorchlightning.ai/
     """
     def __init__(
         self,
@@ -22,8 +27,18 @@ class DeepChemLightningDataModule(L.LightningDataModule):
         batch_size: int,
         collate_fn: Optional[Callable] = None,
         num_workers: int = 0,
-        model = None
+        model: Optional[TorchModel] = None
     ):
+        """
+        Lightning DataModule for DeepChem datasets.
+        
+        Args:
+            dataset: DeepChem dataset for training
+            batch_size: Batch size for training
+            collate_fn: Custom collate function (default: collate_dataset_wrapper)
+            num_workers: Number of workers for DataLoader
+            model: DeepChem model for collate function
+        """
         super().__init__()
         self._batch_size = batch_size
         self._dataset = IndexDiskDatasetWrapper(dataset)

@@ -3,16 +3,32 @@ import lightning as L
 from deepchem.models.optimizers import LearningRateSchedule
 import numpy as np
 from deepchem.models.torch_models import TorchModel, ModularTorchModel
-
+from typing import Any, Tuple, List, Optional
+from deepchem.utils.typing import OneOrMany
+from deepchem.trans import Transformer
 
 class DeepChemLightningModule(L.LightningModule):
     """
-    Lightning Module for DeepChem models.
+    A PyTorch Lightning wrapper for DeepChem models.
+
+    This module integrates DeepChem's models with PyTorch Lightning's training loop,
+    enabling efficient training and prediction workflows while managing model-specific
+    operations such as loss calculation, uncertainty estimation, and data transformations.
+
+    The class provides a consistent interface for:
+      - Forward propagation through the model.
+      - A training step method that computes and logs a loss value.
+      - A prediction step method that handles uncertainty and additional outputs.
+      - Configuration of optimizers and (optional) learning rate schedulers.
+
+    PyTorch Lightning documentation: https://pytorch-lightning.readthedocs.io/en/stable/api/pytorch_lightning.core.LightningModule.html?highlight=LightningModule
     
     Args:
-        model: DeepChem model instance
+        model (TorchModel): An instance of a DeepChem TorchModel containing both 
+                            the underlying PyTorch model and additional properties 
+                            such as loss functions, optimizers, and output configuration.
     """
-    def __init__(self, model):
+    def __init__(self, model: TorchModel):
         super().__init__()
         self.save_hyperparameters(ignore=["model","dc_model"])
         self.model = model.model
@@ -27,15 +43,33 @@ class DeepChemLightningModule(L.LightningModule):
         self._loss_fn = model._loss_fn
         self.uncertainty = False if not hasattr(model, 'uncertainty') else model.uncertainty
         self.learning_rate = model.learning_rate
-        self._transformers = []
-        self.other_output_types = None
+        self._transformers: List[Transformer] = []
+        self.other_output_types: Optional[OneOrMany[str]] = None
 
-    def forward(self, x):
+    def forward(self, x: Any):
         """Forward pass of the model."""
         return self.model(x)
 
-    def training_step(self, batch, batch_idx):
-        """Training step."""
+    def training_step(self, batch: Tuple[Any, Any, Any], batch_idx: int):
+        """
+        Execute a single training step, including loss computation and logging.
+
+        The method unpacks the batch into inputs, labels, and weights and then performs:
+          - A forward pass through the network.
+          - Loss computation which differentiates between ModularTorchModel and
+            regular TorchModel based on the provided instance.
+          - Logging of the loss value for monitoring.
+
+        Args:
+            batch (Tuple[Any, Any, Any]): A tuple containing:
+                - inputs: data inputs to the model,
+                - labels: ground truth values,
+                - weights: sample weights for the loss computation.
+            batch_idx (int): Index of the current batch (useful for logging or debugging).
+
+        Returns:
+            torch.Tensor: The computed loss value as a torch tensor. This value is used for backpropagation.
+        """
         inputs, labels, weights = batch
         if isinstance(inputs, list) and len(inputs) == 1:
             inputs = inputs[0]
@@ -52,8 +86,18 @@ class DeepChemLightningModule(L.LightningModule):
         return loss
     
 
-    def predict_step(self, batch, batch_idx):
-        """Prediction step with support for uncertainties and transformers."""
+    def predict_step(self, batch: Tuple[Any, Any, Any], batch_idx: int):
+        """
+        Perform a prediction step with optional support for uncertainty estimates and data transformations.
+        This method refers from _predict method form TorchModel.
+
+        Args:
+            batch (Tuple[Any, Any, Any]): A tuple containing:
+                - inputs: the input data for prediction,
+                - labels: (unused in prediction, but maintained for consistency),
+                - weights: (unused in prediction).
+            batch_idx (int): Index of the current batch.
+        """
         results, variances = None, None
         inputs, _, _ = batch
         if isinstance(inputs, list) and len(inputs) == 1:
@@ -134,6 +178,7 @@ class DeepChemLightningModule(L.LightningModule):
 
     def configure_optimizers(self):
         """Configure optimizers and learning rate schedulers."""
+        # No parameters to check
         py_optimizer = self.optimizer._create_pytorch_optimizer(
             self.model.parameters())
             
