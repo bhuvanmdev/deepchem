@@ -19,7 +19,7 @@ class DeepChemLightningDataModule(L.LightningDataModule):
     processing of inputs.
 
     For more information, see:
-      - PyTorch Lightning DataModule Documentation: https://www.pytorchlightning.ai/
+      - PyTorch Lightning DataModule Documentation: https://pytorch-lightning.readthedocs.io/en/stable/extensions/datamodules.html
     """
     def __init__(
         self,
