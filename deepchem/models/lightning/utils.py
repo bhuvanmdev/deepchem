@@ -8,25 +8,29 @@ import bisect
 def collate_dataset_wrapper(batch, model):
     """
     Collate function for DeepChem datasets to work with PyTorch DataLoader.
-    
+
     Args:
         batch: Batch of data from DataLoader
         model: DeepChem model instance
-        
+
     Returns:
         Tuple of (inputs, labels, weights)
     """
+
     class DeepChemBatch:
+
         def __init__(self, batch, model):
-            X, Y, W, ids = [], [], [], [] 
+            X, Y, W, ids = [], [], [], []
             for i in range(len(batch)):
                 X.append(batch[i][0])
                 Y.append(batch[i][1])
                 W.append(batch[i][2])
                 ids.append(batch[i][3])
-            batch = next(model.default_generator(NumpyDataset(X, Y, W, ids))) 
+            batch = next(model.default_generator(NumpyDataset(X, Y, W, ids)))
             self.batch_list = model._prepare_batch(batch)
+
     return DeepChemBatch(batch, model).batch_list
+
 
 class IndexDiskDatasetWrapper(Dataset):
     """A wrapper for a dataset that returns the index of each item in the dataset.
@@ -41,7 +45,7 @@ class IndexDiskDatasetWrapper(Dataset):
 
     def __len__(self):
         return len(self.dataset)
-    
+
     def _cumulative_sum(self) -> List[int]:
         """Internal helper method to calculate cumulative shard sizes.
 
@@ -62,9 +66,15 @@ class IndexDiskDatasetWrapper(Dataset):
             A list where element `i` is the sum of the number of samples in
             shards 0 through `i`.
         """
-        self._shard_sizes = [self.dataset._get_shard_shape(i)[0][0] for i in range(self.dataset.get_number_shards())]
+        self._shard_sizes = [
+            self.dataset._get_shard_shape(i)[0][0]
+            for i in range(self.dataset.get_number_shards())
+        ]
         current_sum = 0
-        cumulative_sums = [0]+[(current_sum := current_sum + size) for size in self._shard_sizes]
+        cumulative_sums = [0] + [
+            (current_sum := current_sum + size)  # noqa: F841
+            for size in self._shard_sizes
+        ]
         return cumulative_sums
 
     def __getitem__(self, index: int):
@@ -103,21 +113,20 @@ class IndexDiskDatasetWrapper(Dataset):
         if not self._have_cumulative_sums:
             self._have_cumulative_sums = True
             self._cumulative_sums = self._cumulative_sum()
-        
+
         # Determine which shard contains the index
         shard_index = bisect.bisect_right(self._cumulative_sums, index) - 1
         # Calculate local index within the shard
         local_index = index - self._cumulative_sums[shard_index]
-        
+
         # Load the shard data
         shard = self.dataset.get_shard(shard_index)
         X, y, w, ids = shard
-        
+
         # Extract the sample (assuming X and y are present)
         X_sample = X[local_index] if X is not None else None
         y_sample = y[local_index] if y is not None else None
         w_sample = w[local_index] if y is not None else None
         ids_sample = ids[local_index] if ids is not None else None
-        
-        return (X_sample, y_sample, w_sample, ids_sample)
 
+        return (X_sample, y_sample, w_sample, ids_sample)

@@ -3,6 +3,7 @@ import pytest
 import deepchem as dc
 from deepchem.models.lightning.utils import IndexDiskDatasetWrapper
 
+
 @pytest.fixture(scope="module")
 def dummy_disk_dataset(tmp_path_factory):
     """
@@ -25,7 +26,8 @@ def dummy_disk_dataset(tmp_path_factory):
     n_tasks = 1
 
     # Create the full dataset in memory first
-    X = np.arange(n_samples * n_features, dtype=np.float32).reshape(n_samples, n_features)
+    X = np.arange(n_samples * n_features,
+                  dtype=np.float32).reshape(n_samples, n_features)
     y = np.arange(n_samples, dtype=np.float32).reshape(n_samples, n_tasks)
     w = np.ones((n_samples, n_tasks), dtype=np.float32)
     ids = np.array([f"id_{i}" for i in range(n_samples)])
@@ -39,8 +41,11 @@ def dummy_disk_dataset(tmp_path_factory):
             start = end
 
     # Use the generator to create the DiskDataset and wrap it in IndexDatasetWrapper
-    dataset = IndexDiskDatasetWrapper(dc.data.DiskDataset.create_dataset(shard_generator(), data_dir=data_dir))
+    dataset = IndexDiskDatasetWrapper(
+        dc.data.DiskDataset.create_dataset(shard_generator(),
+                                           data_dir=data_dir))
     return dataset
+
 
 def test_cumulative_sum(dummy_disk_dataset):
     """
@@ -89,6 +94,7 @@ def test_getitem_shard_boundaries(dummy_disk_dataset):
     x8, y8, _, id8 = dummy_disk_dataset[8]
     np.testing.assert_array_equal(x8, np.array([16., 17.], dtype=np.float32))
     assert id8 == "id_8"
+
 
 def test_getitem_out_of_bounds(dummy_disk_dataset):
     """Tests that an IndexError is raised for out-of-bounds access."""
