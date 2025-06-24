@@ -7,7 +7,7 @@ from copy import deepcopy
 from pathlib import Path
 
 # Import the custom modules you are testing
-from deepchem.models.lightning.new_dc_lightning_dataset_module import DCLightningDataModule
+from deepchem.models.lightning.new_dc_lightning_dataset_module import DeepChemLightningDataModule
 from deepchem.models.lightning.new_dc_lightning_module import DeepChemLightningModule
 
 # Check if a GPU is available for testing, otherwise skip GPU tests

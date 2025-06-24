@@ -1,36 +1,11 @@
 from torch.utils.data import DataLoader
 import lightning as L
-from lightning.pytorch.callbacks import TQDMProgressBar
 import deepchem as dc
-from deepchem.data.datasets import NumpyDataset
-import logging
 from typing import Optional,Callable
+from deepchem.models.lightning.utils import collate_dataset_wrapper, IndexDiskDatasetWrapper
 
 
-def collate_dataset_wrapper(batch, model):
-    """
-    Collate function for DeepChem datasets to work with PyTorch DataLoader.
-    
-    Args:
-        batch: Batch of data from DataLoader
-        model: DeepChem model instance
-        
-    Returns:
-        Tuple of (inputs, labels, weights)
-    """
-    class DeepChemBatch:
-        def __init__(self, batch, model):
-            X, Y, W, ids = [], [], [], [] 
-            for i in range(len(batch)):
-                X.append(batch[i][0])
-                Y.append(batch[i][1])
-                W.append(batch[i][2])
-                ids.append(batch[i][3])
-            batch = next(model.default_generator(NumpyDataset(X, Y, W, ids)))
-            self.batch_list = model._prepare_batch(batch)
-    return DeepChemBatch(batch, model).batch_list
-
-class DCLightningDataModule(L.LightningDataModule):
+class DeepChemLightningDataModule(L.LightningDataModule):
     """
     Lightning DataModule for DeepChem datasets.
     
@@ -51,7 +26,7 @@ class DCLightningDataModule(L.LightningDataModule):
     ):
         super().__init__()
         self._batch_size = batch_size
-        self._dataset = dataset
+        self._dataset = IndexDatasetWrapper(dataset)
         self._model = model
         
         if collate_fn is None and model is not None:

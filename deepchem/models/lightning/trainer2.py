@@ -1,7 +1,7 @@
 from rdkit import rdBase
 rdBase.DisableLog('rdApp.warning')
 
-from deepchem.models.lightning.new_dc_lightning_dataset_module import DCLightningDataModule
+from deepchem.models.lightning.new_dc_lightning_dataset_module import DeepChemLightningDataModule
 from deepchem.models.lightning.new_dc_lightning_module import DeepChemLightningModule
 import deepchem as dc
 import lightning as L
@@ -72,7 +72,7 @@ class DeepChemLightningTrainer:
             self.trainer_kwargs['log_every_n_steps'] = max(1, dataset_size // (self.batch_size * 2))
         
         # Create data module
-        data_module = DCLightningDataModule(
+        data_module = DeepChemLightningDataModule(
             dataset=train_dataset,
             batch_size=self.batch_size,
             num_workers=num_workers,
@@ -111,7 +111,7 @@ class DeepChemLightningTrainer:
             self.trainer = L.Trainer(**self.trainer_kwargs)
             
         # Create data module
-        data_module = DCLightningDataModule(
+        data_module = DeepChemLightningDataModule(
             dataset=dataset,
             batch_size=self.batch_size,
             num_workers=num_workers,
