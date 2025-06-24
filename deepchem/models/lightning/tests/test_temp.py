@@ -57,7 +57,7 @@ def test_gcn_fit_predict_workflow(gcn_model, gcn_data):
 
     # 1. Setup DataModule and LightningModule
     # The `gcn_model` instance is passed to the DataModule to handle the complex collation
-    data_module = DCLightningDataModule(dataset=dataset, batch_size=16, model=gcn_model)
+    data_module = DeepChemLightningDataModule(dataset=dataset, batch_size=16, model=gcn_model)
     lightning_model = DeepChemLightningModule(model=gcn_model)
 
     # 2. Setup Trainer
@@ -102,7 +102,7 @@ def test_gcn_checkpointing_and_reloading(gcn_model, gcn_data, tmp_path="temp"):
     dataset = gcn_data["dataset"]
     
     # 1. Setup modules and trainer with a temporary directory for checkpoints
-    data_module = DCLightningDataModule(dataset=dataset, batch_size=16, model=gcn_model)
+    data_module = DeepChemLightningDataModule(dataset=dataset, batch_size=16, model=gcn_model)
     lightning_model = DeepChemLightningModule(model=gcn_model)
 
     trainer = L.Trainer(
