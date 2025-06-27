@@ -4,6 +4,7 @@ rdBase.DisableLog('rdApp.warning')
 from deepchem.models.lightning.new_dc_lightning_dataset_module import DeepChemLightningDataModule
 from deepchem.models.lightning.new_dc_lightning_module import DeepChemLightningModule
 import deepchem as dc
+from deepchem.models.torch_models import TorchModel
 import lightning as L
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 from deepchem.utils.typing import OneOrMany
@@ -20,7 +21,7 @@ class DeepChemLightningTrainer:
     """
     def __init__(
         self,
-        model,
+        model: TorchModel,
         batch_size: int = 32,
         **trainer_kwargs
     ):
@@ -120,7 +121,7 @@ class DeepChemLightningTrainer:
         self.lightning_model.eval()
         # Run prediction
 
-        self.lightning_model.transformers = transformers
+        self.lightning_model._transformers = transformers
         self.lightning_model.other_output_types = other_output_types
         if uncertainty is not None:
             self.lightning_model.uncertainty = uncertainty
@@ -145,16 +146,35 @@ class DeepChemLightningTrainer:
         else:
             raise ValueError("Model has not been trained yet. Please call fit() first.")
     
-    def load_checkpoint(self, filepath: str):
+    @staticmethod
+    def load_checkpoint(filepath: str, model: TorchModel, batch_size: int = 32, **trainer_kwargs):
         """
-        Load model from checkpoint.
-        
+        Load model from checkpoint and create a new trainer instance.
+
         Args:
             filepath: Path to checkpoint
+            model: DeepChem model instance to load weights into
+            batch_size: Batch size for the trainer/model
+            **trainer_kwargs: Additional trainer arguments
+
+        Returns:
+            DeepChemLightningTrainer: New trainer instance with loaded model
         """
-        self.lightning_model = DeepChemLightningModule.load_from_checkpoint(
+        # Load the lightning module from checkpoint
+        lightning_model = DeepChemLightningModule.load_from_checkpoint(
             filepath,
-            model=self.model
+            model=model
         )
-        return self.lightning_model
+        
+        # Create a new trainer instance
+        trainer = DeepChemLightningTrainer(
+            model=model,
+            batch_size=batch_size,
+            **trainer_kwargs
+        )
+        
+        # Replace the lightning model with the loaded one
+        trainer.lightning_model = lightning_model
+        
+        return trainer
 
