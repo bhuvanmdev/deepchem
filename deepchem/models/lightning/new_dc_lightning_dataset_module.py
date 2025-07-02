@@ -1,6 +1,7 @@
 from torch.utils.data import DataLoader
 import lightning as L
 import deepchem as dc
+from deepchem.data import Dataset
 from typing import Optional, Callable
 from deepchem.models.lightning.utils import collate_dataset_wrapper, IndexDiskDatasetWrapper
 from deepchem.models.torch_models import TorchModel
@@ -37,7 +38,7 @@ class DeepChemLightningDataModule(L.LightningDataModule):
     """
 
     def __init__(self,
-                 dataset: dc.data.Dataset,
+                 dataset: Dataset,
                  batch_size: int,
                  collate_fn: Optional[Callable] = None,
                  num_workers: int = 0,

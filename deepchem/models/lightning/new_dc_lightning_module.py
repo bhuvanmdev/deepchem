@@ -139,6 +139,7 @@ class DeepChemLightningModule(L.LightningModule):
         self.log("train_loss", loss.item(), prog_bar=True, sync_dist=True)
         return loss
 
+
     def predict_step(self, batch: Tuple[Any, Any, Any], batch_idx: int):
         """Perform a prediction step with optional support for uncertainty estimates and data transformations.
 
