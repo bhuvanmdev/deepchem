@@ -164,23 +164,69 @@ class DeepChemLightningTrainer:
         return predictions
 
     def save_checkpoint(self, filepath: str):
-        """Save model checkpoint.
+        """Save model checkpoint using Lightning's native checkpointing.
 
         Parameters
         ----------
         filepath: str
-            Path to save checkpoint.
+            Path to save the checkpoint file.
 
         Raises
         ------
         ValueError
             If model has not been trained yet.
         """
-        if hasattr(self, 'trainer'):
-            self.trainer.save_checkpoint(filepath)
-        else:
+        if not hasattr(self, 'trainer'):
             raise ValueError(
                 "Model has not been trained yet. Please call fit() first.")
+        
+        self.trainer.save_checkpoint(filepath)
+
+    def restore(self, checkpoint_path: str):
+        """Restore model from checkpoint using Lightning's native loading.
+
+        Parameters
+        ----------
+        checkpoint_path: str
+            Path to the checkpoint file.
+        """
+        # Load Lightning module with all hyperparameters and state
+        self.lightning_model = DeepChemLightningModule.load_from_checkpoint(
+            checkpoint_path, model=self.model)
+        self.batch_size = self.lightning_model.batch_size
+
+    def resume_training(self, 
+                       train_dataset, 
+                       checkpoint_path: str,
+                       num_workers: int = 4):
+        """Resume training from a checkpoint.
+
+        Parameters
+        ----------
+        train_dataset: Dataset
+            Training dataset.
+        checkpoint_path: str
+            Path to checkpoint to resume from.
+        num_workers: int, default 4
+            Number of workers for DataLoader.
+        """
+        # Set log_every_n_steps if not provided
+        if 'log_every_n_steps' not in self.trainer_kwargs:
+            dataset_size = len(train_dataset)
+            self.trainer_kwargs['log_every_n_steps'] = max(
+                1, dataset_size // (self.batch_size * 2))
+
+        # Create data module
+        data_module = DeepChemLightningDataModule(dataset=train_dataset,
+                                                  batch_size=self.batch_size,
+                                                  num_workers=num_workers,
+                                                  model=self.model)
+
+        # Create trainer
+        self.trainer = L.Trainer(**self.trainer_kwargs)
+
+        # Resume training from checkpoint
+        self.trainer.fit(self.lightning_model, data_module, ckpt_path=checkpoint_path)
 
     @staticmethod
     def load_checkpoint(filepath: str,
@@ -192,7 +238,7 @@ class DeepChemLightningTrainer:
         Parameters
         ----------
         filepath: str
-            Path to checkpoint.
+            Path to checkpoint file (.ckpt).
         model: TorchModel
             DeepChem model instance to load weights into.
         batch_size: int, default 32
@@ -205,16 +251,12 @@ class DeepChemLightningTrainer:
         DeepChemLightningTrainer
             New trainer instance with loaded model.
         """
-        # Load the lightning module from checkpoint
-        lightning_model = DeepChemLightningModule.load_from_checkpoint(
-            filepath, model=model)
-
-        # Create a new trainer instance
+        # Create trainer first
         trainer = DeepChemLightningTrainer(model=model,
                                            batch_size=batch_size,
                                            **trainer_kwargs)
-
-        # Replace the lightning model with the loaded one
-        trainer.lightning_model = lightning_model
-
+        
+        # Load the checkpoint
+        trainer.restore(filepath)
+        
         return trainer

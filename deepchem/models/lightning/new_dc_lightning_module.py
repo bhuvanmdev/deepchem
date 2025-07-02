@@ -67,10 +67,11 @@ class DeepChemLightningModule(L.LightningModule):
 
     def __init__(self, model: TorchModel):
         super().__init__()
-        self.save_hyperparameters(ignore=["model", "dc_model"])
+        # Save hyperparameters for Lightning's checkpoint system
+        self.save_hyperparameters(ignore=["model"])
+        
         self.model = model.model
         self.dc_model = model
-        self.loss_mod = model.loss
         self.optimizer = model.optimizer
         self.output_types = model.output_types
         self._prediction_outputs = model._prediction_outputs
@@ -78,8 +79,7 @@ class DeepChemLightningModule(L.LightningModule):
         self._variance_outputs = model._variance_outputs
         self._other_outputs = model._other_outputs
         self._loss_fn = model._loss_fn
-        self.uncertainty = False if not hasattr(
-            model, 'uncertainty') else model.uncertainty
+        self.uncertainty = getattr(model, 'uncertainty', False)
         self.learning_rate = model.learning_rate
         self._transformers: List[Transformer] = []
         self.other_output_types: Optional[OneOrMany[str]] = None
@@ -124,6 +124,7 @@ class DeepChemLightningModule(L.LightningModule):
             The computed loss value as a torch tensor. This value is used for backpropagation.
         """
         inputs, labels, weights = batch
+        
         if isinstance(inputs, list) and len(inputs) == 1:
             inputs = inputs[0]
         outputs = self.model(inputs)
@@ -141,7 +142,7 @@ class DeepChemLightningModule(L.LightningModule):
     def predict_step(self, batch: Tuple[Any, Any, Any], batch_idx: int):
         """Perform a prediction step with optional support for uncertainty estimates and data transformations.
 
-        This method refers from _predict method form TorchModel.
+        This method is based on the _predict method from TorchModel.
 
         Parameters
         ----------
@@ -172,10 +173,10 @@ class DeepChemLightningModule(L.LightningModule):
             )
 
         if self.uncertainty:
-            if self._variance_outputs is None or len(
-                    self._variance_outputs) == 0:
+            if self._variance_outputs is None or len(self._variance_outputs) == 0:
                 raise ValueError('This model cannot compute uncertainties')
-            if len(self._variance_outputs) != len(self._prediction_outputs):
+            if (self._prediction_outputs is not None and 
+                len(self._variance_outputs) != len(self._prediction_outputs)):
                 raise ValueError(
                     'The number of variances must exactly match the number of outputs'
                 )
@@ -189,7 +190,7 @@ class DeepChemLightningModule(L.LightningModule):
         output_values = [t.detach().cpu().numpy() for t in output_values]
 
         # Apply transformers and record results
-        if self.uncertainty:
+        if self.uncertainty and self._variance_outputs is not None:
             var = [output_values[i] for i in self._variance_outputs]
             if variances is None:
                 variances = [var]
@@ -199,7 +200,8 @@ class DeepChemLightningModule(L.LightningModule):
 
         access_values = []
         if self.other_output_types:
-            access_values += self._other_outputs
+            if self._other_outputs is not None:
+                access_values += self._other_outputs
         elif self._prediction_outputs is not None:
             access_values += self._prediction_outputs
 
