@@ -208,6 +208,7 @@ def test_gcn_overfit_with_lightning_trainer(gcn_model, gcn_data):
         number_atom_features=30,  # Same as reference
         batch_size=10,  # Same as reference
         learning_rate=0.0003,  # Same as reference
+        device='cpu',  # Use GPU for training
     )
 
     # Create Lightning trainer with parameters similar to reference test
@@ -216,6 +217,7 @@ def test_gcn_overfit_with_lightning_trainer(gcn_model, gcn_data):
         batch_size=10,  # Same as reference
         max_epochs=100,  # Reduce for debugging
         accelerator="cuda",
+        strategy="fsdp",
         devices=-1,  # Use multiple GPUs to test the multi-GPU prediction fix
         logger=False,
         enable_checkpointing=False,
@@ -234,29 +236,24 @@ def test_gcn_overfit_with_lightning_trainer(gcn_model, gcn_data):
     # Test multi-GPU prediction directly
     print(f"Testing multi-GPU prediction...")
     try:
-        predictions = lightning_trainer.predict(dataset, num_workers=0)
+        predictions_multi = lightning_trainer.predict(dataset, num_workers=0)
         print(f"Multi-GPU prediction successful!")
-        print(f"Predictions type: {type(predictions)}")
-        if isinstance(predictions, list) and len(predictions) > 0:
-            print(f"First prediction shape: {getattr(predictions[0], 'shape', 'no shape')}")
+        print(f"Predictions type: {type(predictions_multi)}")
+        if isinstance(predictions_multi, list) and len(predictions_multi) > 0:
+            total_samples = sum(getattr(p, 'shape', [0])[0] for p in predictions_multi)
+            print(f"Total prediction samples (multi-GPU): {total_samples}")
+            print(f"Expected dataset size: {len(dataset)}")
     except Exception as e:
         print(f"Multi-GPU prediction failed: {e}")
-        predictions = None
+        predictions_multi = None
 
     # Now test evaluation (which uses prediction internally)
     try:
-        scores = lightning_trainer.evaluate(dataset, [metric], transformers)
-        print(f"Evaluation successful!")
+        scores_multi = lightning_trainer.evaluate(dataset, [metric], transformers)
+        print(f"Multi-GPU evaluation successful!")
+        print(f"Multi-GPU ROC score: {scores_multi.get('mean-roc_auc_score', 'N/A')}")
     except Exception as e:
-        print(f"Evaluation failed: {e}")
-        scores = None
+        print(f"Multi-GPU evaluation failed: {e}")
+        scores_multi = None
 
-    # Debug: Print scores keys and values
-    print(f"Scores: {scores}")
-    
-    # Assert that the model overfits (same threshold as reference)
-    if isinstance(scores, dict) and 'mean-roc_auc_score' in scores:
-        assert scores['mean-roc_auc_score'] >= 0.85, f"Model failed to overfit. Score: {scores['mean-roc_auc_score']}"
-    else:
-        print(f"Using dummy score for assertion since evaluation failed")
-        assert True  # Pass the test since we're in debugging mode
+    assert scores_multi["mean-roc_auc_score"] > 0.85, "Model did not learn anything during training."

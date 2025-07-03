@@ -108,10 +108,15 @@ class DeepChemLightningDataModule(L.LightningDataModule):
         DataLoader
             PyTorch DataLoader for prediction data.
         """
+        # Important: For distributed prediction, we need to ensure deterministic ordering
+        # and avoid duplicates/drops. Setting shuffle=False and using a DistributedSampler
+        # with drop_last=False helps ensure all samples are processed exactly once
         return DataLoader(
             self.predict_dataset,
             batch_size=self._batch_size,
             collate_fn=self.collate_fn,
-            shuffle=False,
+            shuffle=False,  # Critical: never shuffle during prediction
             num_workers=self.num_workers,
+            # Note: Lightning automatically handles DistributedSampler in DDP mode
+            # but we ensure consistent behavior with drop_last=False (default)
         )

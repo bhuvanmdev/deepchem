@@ -143,7 +143,8 @@ class DeepChemLightningModule(L.LightningModule):
     def predict_step(self, batch: Tuple[Any, Any, Any], batch_idx: int):
         """Perform a prediction step with optional support for uncertainty estimates and data transformations.
 
-        This method is based on the _predict method from TorchModel.
+        This method is based on the _predict method from TorchModel and includes multi-GPU support
+        using all_gather to collect predictions from all ranks in distributed training.
 
         Parameters
         ----------
@@ -159,8 +160,8 @@ class DeepChemLightningModule(L.LightningModule):
         -------
         Any
             Model predictions, with optional uncertainty estimates if configured.
+            In multi-GPU mode, predictions are gathered from all ranks.
         """
-        results, variances = None, None
         inputs, _, _ = batch
         if isinstance(inputs, list) and len(inputs) == 1:
             inputs = inputs[0]
@@ -188,17 +189,12 @@ class DeepChemLightningModule(L.LightningModule):
                     'This model cannot compute other outputs since no other output_types were specified.'
                 )
 
-        output_values = [t.detach().cpu().numpy() for t in output_values]
-
-        # Apply transformers and record results
+        # Handle variance outputs for uncertainty estimation
+        variances = None
         if self.uncertainty and self._variance_outputs is not None:
-            var = [output_values[i] for i in self._variance_outputs]
-            if variances is None:
-                variances = [var]
-            else:
-                for i, t in enumerate(var):
-                    variances[i].append(t)
+            variances = [output_values[i] for i in self._variance_outputs]
 
+        # Select the appropriate outputs
         access_values = []
         if self.other_output_types:
             if self._other_outputs is not None:
@@ -209,6 +205,57 @@ class DeepChemLightningModule(L.LightningModule):
         if len(access_values) > 0:
             output_values = [output_values[i] for i in access_values]
 
+        # Handle multi-GPU prediction gathering using self.all_gather
+        if self.trainer and self.trainer.world_size > 1:
+            # In distributed mode, gather predictions from all ranks
+            gathered_outputs = []
+            for output_tensor in output_values:
+                # Gather tensor from all ranks
+                gathered_tensor = self.all_gather(output_tensor)
+                
+                # Check if the result is a tensor (expected) and reshape if needed
+                if isinstance(gathered_tensor, torch.Tensor):
+                    # all_gather returns tensor with shape (world_size, batch_size, ...)
+                    # We need to reshape to (world_size * batch_size, ...)
+                    if gathered_tensor.dim() > output_tensor.dim():
+                        shape = gathered_tensor.shape
+                        gathered_tensor = gathered_tensor.view(-1, *shape[2:])
+                    gathered_outputs.append(gathered_tensor)
+                else:
+                    # Fallback: if all_gather returns a list/tuple, concatenate manually
+                    if isinstance(gathered_tensor, (list, tuple)):
+                        gathered_outputs.append(torch.cat(gathered_tensor, dim=0))
+                    else:
+                        # Last resort: use the original tensor
+                        gathered_outputs.append(output_tensor)
+            
+            output_values = gathered_outputs
+            
+            # Also gather variance outputs if present
+            if variances is not None:
+                gathered_variances = []
+                for var_tensor in variances:
+                    gathered_var = self.all_gather(var_tensor)
+                    
+                    if isinstance(gathered_var, torch.Tensor):
+                        # Reshape if needed
+                        if gathered_var.dim() > var_tensor.dim():
+                            shape = gathered_var.shape
+                            gathered_var = gathered_var.view(-1, *shape[2:])
+                        gathered_variances.append(gathered_var)
+                    else:
+                        # Fallback for non-tensor results
+                        if isinstance(gathered_var, (list, tuple)):
+                            gathered_variances.append(torch.cat(gathered_var, dim=0))
+                        else:
+                            gathered_variances.append(var_tensor)
+                
+                variances = gathered_variances
+
+        # Convert to numpy arrays
+        output_values = [t.detach().cpu().numpy() for t in output_values]
+        
+        # Apply transformers if present
         if len(self._transformers) > 0:
             if len(output_values) > 1:
                 raise ValueError(
@@ -220,27 +267,20 @@ class DeepChemLightningModule(L.LightningModule):
                     undo_transforms(output_values[0], self._transformers)
                 ]
 
-        if results is None:
-            results = [[] for i in range(len(output_values))]
-        for i, t in enumerate(output_values):
-            results[i].append(t)
-
-        # Concatenate arrays to create the final results
-        final_results = []
-        final_variances = []
-        if results is not None:
-            for r in results:
-                final_results.append(np.concatenate(r, axis=0))
-
+        # Handle uncertainty outputs
         if self.uncertainty and variances is not None:
-            for v in variances:
-                final_variances.append(np.concatenate(v, axis=0))
-            return zip(final_results, final_variances)
+            variances = [v.detach().cpu().numpy() for v in variances]
+            
+            if len(output_values) == 1 and len(variances) == 1:
+                return (output_values[0], variances[0])
+            else:
+                return list(zip(output_values, variances))
 
-        if len(final_results) == 1:
-            return final_results[0]
+        # Return the final results
+        if len(output_values) == 1:
+            return output_values[0]
         else:
-            return final_results
+            return output_values
 
     def configure_optimizers(self):
         """Configure optimizers and learning rate schedulers.

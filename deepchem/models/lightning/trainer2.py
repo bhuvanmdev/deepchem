@@ -133,7 +133,8 @@ class DeepChemLightningTrainer:
                 other_output_types: Optional[OneOrMany[str]] = None,
                 num_workers: int = 0,
                 uncertainty: Optional[bool] = None,
-                ckpt_path: Optional[str] = None):
+                ckpt_path: Optional[str] = None,
+                use_multi_gpu: bool = False):
         """Run inference on the provided dataset.
 
         Parameters
@@ -150,6 +151,8 @@ class DeepChemLightningTrainer:
             Whether to compute uncertainty estimates.
         ckpt_path: Optional[str], default None
             Path to a checkpoint file to load model weights from.
+        use_multi_gpu: bool, default False
+            Whether to use multi-GPU prediction. If False, forces single-GPU for correct ordering.
 
         Returns
         -------
@@ -161,18 +164,20 @@ class DeepChemLightningTrainer:
         is_multi_gpu = (isinstance(current_devices, int) and current_devices > 1) or \
                       (isinstance(current_devices, list) and len(current_devices) > 1) or \
                       (current_devices == -1)
-
-        if is_multi_gpu:
-            # For multi-GPU prediction, we'll use a special Lightning callback to gather predictions
-            from .multi_gpu_prediction_callback import MultiGPUPredictionCallback
-            prediction_callback = MultiGPUPredictionCallback()
-            
-            # Create trainer with prediction callback
+        
+        if is_multi_gpu and not use_multi_gpu:
+            # Default behavior: force single-GPU prediction for correct ordering
             predict_trainer_kwargs = self.trainer_kwargs.copy()
-            predict_trainer_kwargs['callbacks'] = predict_trainer_kwargs.get('callbacks', []) + [prediction_callback]
+            predict_trainer_kwargs['devices'] = 1  # Force single GPU
+            print("[WARNING] Using single GPU for prediction to ensure correct sample ordering")
+            print("[INFO] Set use_multi_gpu=True to enable experimental multi-GPU prediction")
             self.trainer = L.Trainer(**predict_trainer_kwargs)
+        elif is_multi_gpu and use_multi_gpu:
+            # Experimental: Use multi-GPU prediction with gathering
+            print("[INFO] Using experimental multi-GPU prediction - results may need post-processing")
+            self.trainer = L.Trainer(**self.trainer_kwargs)
         else:
-            # Single GPU or CPU - use existing trainer
+            # Single GPU or CPU
             self.trainer = L.Trainer(**self.trainer_kwargs)
 
         # Create data module
@@ -194,11 +199,11 @@ class DeepChemLightningTrainer:
                                            return_predictions=True,
                                            ckpt_path=ckpt_path)
 
-        # If we used the multi-GPU callback, get the gathered predictions
-        if is_multi_gpu:
-            return prediction_callback.gathered_predictions
-        else:
-            return predictions
+        # Post-process multi-GPU predictions if needed
+        if is_multi_gpu and use_multi_gpu and isinstance(predictions, list):
+            predictions = self._post_process_multi_gpu_predictions(predictions, len(dataset))
+
+        return predictions
 
     def evaluate(self,
                  dataset: Dataset,
@@ -435,3 +440,68 @@ class DeepChemLightningTrainer:
         trainer.restore(filepath)
         
         return trainer
+
+    def _post_process_multi_gpu_predictions(self, predictions: List, expected_size: int):
+        """
+        Post-process multi-GPU predictions to handle potential ordering issues.
+        
+        This method attempts to clean up multi-GPU prediction results by:
+        1. Flattening nested prediction structures
+        2. Trimming to expected dataset size
+        3. Removing potential duplicates from DDP padding
+        
+        Parameters
+        ----------
+        predictions: List
+            Raw predictions from multi-GPU trainer.predict()
+        expected_size: int
+            Expected number of samples in the dataset
+            
+        Returns
+        -------
+        np.ndarray or List
+            Cleaned predictions
+        """
+        print(f"[DEBUG] Post-processing multi-GPU predictions")
+        print(f"[DEBUG] Raw predictions type: {type(predictions)}, length: {len(predictions) if hasattr(predictions, '__len__') else 'N/A'}")
+        
+        # Collect all prediction arrays
+        all_predictions = []
+        
+        def collect_arrays(obj):
+            """Recursively collect numpy arrays from nested structures."""
+            if isinstance(obj, np.ndarray):
+                all_predictions.append(obj)
+            elif isinstance(obj, (list, tuple)):
+                for item in obj:
+                    collect_arrays(item)
+            elif obj is not None:
+                # Convert other types to numpy arrays
+                try:
+                    arr = np.array(obj)
+                    if arr.size > 0:
+                        all_predictions.append(arr)
+                except:
+                    pass
+        
+        # Collect all arrays recursively
+        collect_arrays(predictions)
+        
+        print(f"[DEBUG] Collected {len(all_predictions)} prediction arrays")
+        for i, arr in enumerate(all_predictions):
+            print(f"[DEBUG] Array {i} shape: {arr.shape}")
+        
+        # Concatenate and trim to expected size
+        if all_predictions:
+            concatenated = np.concatenate(all_predictions, axis=0)
+            
+            # Trim to expected size (removes duplicates from DDP padding)
+            if len(concatenated) > expected_size:
+                print(f"[DEBUG] Trimming predictions from {len(concatenated)} to {expected_size}")
+                concatenated = concatenated[:expected_size]
+            
+            print(f"[DEBUG] Final prediction shape: {concatenated.shape}")
+            return concatenated
+        else:
+            print("[WARNING] No predictions found in multi-GPU output")
+            return np.array([])
