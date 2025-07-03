@@ -187,6 +187,7 @@ def test_gcn_overfit_with_lightning_trainer(gcn_model, gcn_data):
     Tests if the GCN model can overfit to a small dataset using Lightning trainer.
     This validates that the Lightning training loop works correctly and the model
     can learn from the data by achieving good performance on the training set.
+    Also tests the new multi-GPU prediction capability.
     """
     import lightning as L
     from deepchem.models.lightning.trainer2 import DeepChemLightningTrainer
@@ -215,7 +216,7 @@ def test_gcn_overfit_with_lightning_trainer(gcn_model, gcn_data):
         batch_size=10,  # Same as reference
         max_epochs=100,  # Reduce for debugging
         accelerator="cuda",
-        devices=-1,  # Use 2 GPUs to test the multi-GPU fix
+        devices=-1,  # Use multiple GPUs to test the multi-GPU prediction fix
         logger=False,
         enable_checkpointing=False,
         enable_progress_bar=False,
@@ -230,7 +231,19 @@ def test_gcn_overfit_with_lightning_trainer(gcn_model, gcn_data):
     # Train the model
     lightning_trainer.fit(dataset, num_workers=0)
 
-    # Now test evaluation
+    # Test multi-GPU prediction directly
+    print(f"Testing multi-GPU prediction...")
+    try:
+        predictions = lightning_trainer.predict(dataset, num_workers=0)
+        print(f"Multi-GPU prediction successful!")
+        print(f"Predictions type: {type(predictions)}")
+        if isinstance(predictions, list) and len(predictions) > 0:
+            print(f"First prediction shape: {getattr(predictions[0], 'shape', 'no shape')}")
+    except Exception as e:
+        print(f"Multi-GPU prediction failed: {e}")
+        predictions = None
+
+    # Now test evaluation (which uses prediction internally)
     try:
         scores = lightning_trainer.evaluate(dataset, [metric], transformers)
         print(f"Evaluation successful!")

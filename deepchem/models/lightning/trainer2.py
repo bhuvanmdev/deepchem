@@ -111,13 +111,13 @@ class DeepChemLightningTrainer:
         if 'log_every_n_steps' not in self.trainer_kwargs:
             dataset_size = len(train_dataset)
             self.trainer_kwargs['log_every_n_steps'] = max(
-                1, dataset_size // (self.batch_size * 2))
+                1, dataset_size // (int(self.batch_size) * 2))
 
         self.lightning_model = self.lightning_model.train()
 
         # Create data module
         data_module = DeepChemLightningDataModule(dataset=train_dataset,
-                                                  batch_size=self.batch_size,
+                                                  batch_size=int(self.batch_size),
                                                   num_workers=num_workers,
                                                   model=self.model)
 
@@ -156,32 +156,49 @@ class DeepChemLightningTrainer:
         List
             Predictions from the model.
         """
-        # Create a single-GPU trainer for prediction to avoid multi-GPU prediction issues
-        predict_trainer_kwargs = self.trainer_kwargs.copy()
-        predict_trainer_kwargs['devices'] = 1  # Force single GPU for prediction
-        predict_trainer_kwargs['accelerator'] = 'gpu' if 'cuda' in str(predict_trainer_kwargs.get('accelerator', 'auto')).lower() else 'auto'
-        
-        self.trainer = L.Trainer(**predict_trainer_kwargs)
+        # Check if we're running with multiple devices for prediction
+        current_devices = self.trainer_kwargs.get('devices', 'auto')
+        is_multi_gpu = (isinstance(current_devices, int) and current_devices > 1) or \
+                      (isinstance(current_devices, list) and len(current_devices) > 1) or \
+                      (current_devices == -1)
+
+        if is_multi_gpu:
+            # For multi-GPU prediction, we'll use a special Lightning callback to gather predictions
+            from .multi_gpu_prediction_callback import MultiGPUPredictionCallback
+            prediction_callback = MultiGPUPredictionCallback()
+            
+            # Create trainer with prediction callback
+            predict_trainer_kwargs = self.trainer_kwargs.copy()
+            predict_trainer_kwargs['callbacks'] = predict_trainer_kwargs.get('callbacks', []) + [prediction_callback]
+            self.trainer = L.Trainer(**predict_trainer_kwargs)
+        else:
+            # Single GPU or CPU - use existing trainer
+            self.trainer = L.Trainer(**self.trainer_kwargs)
 
         # Create data module
         data_module = DeepChemLightningDataModule(dataset=dataset,
-                                                  batch_size=self.batch_size,
+                                                  batch_size=int(self.batch_size),
                                                   num_workers=num_workers,
                                                   model=self.model)
         self.lightning_model = self.lightning_model.eval()
-        # Run prediction
-
+        
+        # Set prediction parameters
         self.lightning_model._transformers = transformers
         self.lightning_model.other_output_types = other_output_types
         if uncertainty is not None:
             self.lightning_model.uncertainty = uncertainty
 
+        # Run prediction
         predictions = self.trainer.predict(self.lightning_model,
                                            datamodule=data_module,
                                            return_predictions=True,
                                            ckpt_path=ckpt_path)
 
-        return predictions
+        # If we used the multi-GPU callback, get the gathered predictions
+        if is_multi_gpu:
+            return prediction_callback.gathered_predictions
+        else:
+            return predictions
 
     def evaluate(self,
                  dataset: Dataset,
@@ -351,7 +368,7 @@ class DeepChemLightningTrainer:
         # Load Lightning module with all hyperparameters and state
         self.lightning_model = DeepChemLightningModule.load_from_checkpoint(
             checkpoint_path, model=self.model)
-        self.batch_size = self.lightning_model.batch_size
+        # Keep the original batch_size from trainer initialization
 
     def resume_training(self, 
                        train_dataset, 
@@ -372,11 +389,11 @@ class DeepChemLightningTrainer:
         if 'log_every_n_steps' not in self.trainer_kwargs:
             dataset_size = len(train_dataset)
             self.trainer_kwargs['log_every_n_steps'] = max(
-                1, dataset_size // (self.batch_size * 2))
+                1, dataset_size // (int(self.batch_size) * 2))
 
         # Create data module
         data_module = DeepChemLightningDataModule(dataset=train_dataset,
-                                                  batch_size=self.batch_size,
+                                                  batch_size=int(self.batch_size),
                                                   num_workers=num_workers,
                                                   model=self.model)
 
