@@ -159,26 +159,22 @@ class DeepChemLightningTrainer:
         List
             Predictions from the model.
         """
-        # Check if we're running with multiple devices for prediction
-        current_devices = self.trainer_kwargs.get('devices', 'auto')
-        is_multi_gpu = (isinstance(current_devices, int) and current_devices > 1) or \
-                      (isinstance(current_devices, list) and len(current_devices) > 1) or \
-                      (current_devices == -1)
         
-        if is_multi_gpu and not use_multi_gpu:
+        if not use_multi_gpu:
             # Default behavior: force single-GPU prediction for correct ordering
             predict_trainer_kwargs = self.trainer_kwargs.copy()
             predict_trainer_kwargs['devices'] = 1  # Force single GPU
+            predict_trainer_kwargs['strategy'] = 'auto'  # Use simple strategy for prediction
             print("[WARNING] Using single GPU for prediction to ensure correct sample ordering")
             print("[INFO] Set use_multi_gpu=True to enable experimental multi-GPU prediction")
             self.trainer = L.Trainer(**predict_trainer_kwargs)
-        elif is_multi_gpu and use_multi_gpu:
-            # Experimental: Use multi-GPU prediction with gathering
-            print("[INFO] Using experimental multi-GPU prediction - results may need post-processing")
-            self.trainer = L.Trainer(**self.trainer_kwargs)
         else:
-            # Single GPU or CPU
-            self.trainer = L.Trainer(**self.trainer_kwargs)
+            # Multi-GPU prediction - use DDP instead of FSDP for compatibility
+            predict_trainer_kwargs = self.trainer_kwargs.copy()
+            if predict_trainer_kwargs.get('strategy') == 'fsdp':
+                predict_trainer_kwargs['strategy'] = 'ddp'  # Use DDP for prediction instead of FSDP
+                print("[INFO] Switching from FSDP to DDP strategy for multi-GPU prediction")
+            self.trainer = L.Trainer(**predict_trainer_kwargs)
 
         # Create data module
         data_module = DeepChemLightningDataModule(dataset=dataset,
@@ -199,9 +195,7 @@ class DeepChemLightningTrainer:
                                            return_predictions=True,
                                            ckpt_path=ckpt_path)
 
-        # Post-process multi-GPU predictions if needed
-        if is_multi_gpu and use_multi_gpu and isinstance(predictions, list):
-            predictions = self._post_process_multi_gpu_predictions(predictions, len(dataset))
+
 
         return predictions
 

@@ -21,13 +21,13 @@ except ImportError:
 pytestmark = pytest.mark.skipif(not gpu_available, reason="Tests require a GPU.")
 
 # Or use this approach for pytest
-@pytest.fixture(scope="session", autouse=True)
-def setup_multiprocessing():
-    if torch.cuda.is_available():
-        try:
-            multiprocessing.set_start_method('spawn', force=True)
-        except RuntimeError:
-            pass  # Already set
+# @pytest.fixture(scope="session", autouse=True)
+# def setup_multiprocessing():
+#     if torch.cuda.is_available():
+#         try:
+#             multiprocessing.set_start_method('spawn', force=True)
+#         except RuntimeError:
+#             pass  # Already set
 
 
 @pytest.fixture(scope="module")
@@ -194,6 +194,7 @@ def test_gcn_overfit_with_lightning_trainer(gcn_model, gcn_data):
     from deepchem.models.tests.test_graph_models import get_dataset
     from deepchem.feat import MolGraphConvFeaturizer
     import numpy as np
+    from pathlib import Path
     L.seed_everything(42)
     np.random.seed(42)  # Ensure reproducibility for numpy operations
     torch.manual_seed(42)  # Ensure reproducibility for PyTorch operations
@@ -212,6 +213,8 @@ def test_gcn_overfit_with_lightning_trainer(gcn_model, gcn_data):
     )
 
     # Create Lightning trainer with parameters similar to reference test
+    # Define a custom checkpoint directory
+    checkpoint_dir = "my_custom_checkpoints"
     lightning_trainer = DeepChemLightningTrainer(
         model=gcn_model,
         batch_size=10,  # Same as reference
@@ -220,8 +223,8 @@ def test_gcn_overfit_with_lightning_trainer(gcn_model, gcn_data):
         strategy="fsdp",
         devices=-1,  # Use multiple GPUs to test the multi-GPU prediction fix
         logger=False,
-        enable_checkpointing=False,
         enable_progress_bar=False,
+        default_root_dir=checkpoint_dir,  # Save checkpoints to this directory
     )
     dataset = dc.data.DiskDataset.from_numpy(dataset.X, dataset.y, dataset.w, dataset.ids)
     
@@ -231,25 +234,46 @@ def test_gcn_overfit_with_lightning_trainer(gcn_model, gcn_data):
     print(f"Dataset w shape: {dataset.w.shape}")
 
     # Train the model
-    lightning_trainer.fit(dataset, num_workers=0)
+    lightning_trainer.fit(dataset)
+
+    # After training, create a new DeepChemLightningTrainer instance for prediction and load the best checkpoint
+    # Find the latest checkpoint
+    lightning_trainer.save_checkpoint("best_model.ckpt")
+
+    # Create a new model instance and load weights
+    gcn_model_pred = dc.models.GCNModel(
+        mode='classification',
+        n_tasks=len(tasks),
+        number_atom_features=30,
+        batch_size=10,
+        learning_rate=0.0003,
+        device='cpu',
+    )
+    # Load weights from checkpoint
+    lightning_trainer_pred = DeepChemLightningTrainer.load_checkpoint("best_model.ckpt", gcn_model_pred, 10,accelerator="cuda",
+        strategy="fsdp",
+        devices=-1,
+        logger=False,
+        enable_progress_bar=False,
+        default_root_dir=checkpoint_dir,)
 
     # Test multi-GPU prediction directly
     print(f"Testing multi-GPU prediction...")
-    try:
-        predictions_multi = lightning_trainer.predict(dataset, num_workers=0)
-        print(f"Multi-GPU prediction successful!")
-        print(f"Predictions type: {type(predictions_multi)}")
-        if isinstance(predictions_multi, list) and len(predictions_multi) > 0:
-            total_samples = sum(getattr(p, 'shape', [0])[0] for p in predictions_multi)
-            print(f"Total prediction samples (multi-GPU): {total_samples}")
-            print(f"Expected dataset size: {len(dataset)}")
-    except Exception as e:
-        print(f"Multi-GPU prediction failed: {e}")
-        predictions_multi = None
+    # try:
+    predictions_multi = lightning_trainer_pred.predict(dataset)
+    print(f"Multi-GPU prediction successful!")
+    print(f"Predictions type: {type(predictions_multi)}")
+    if isinstance(predictions_multi, list) and len(predictions_multi) > 0:
+        total_samples = sum(getattr(p, 'shape', [0])[0] for p in predictions_multi)
+        print(f"Total prediction samples (multi-GPU): {total_samples}")
+        print(f"Expected dataset size: {len(dataset)}")
+    # except Exception as e:
+    # print(f"Multi-GPU prediction failed: {e}")
+    # predictions_multi = None
 
     # Now test evaluation (which uses prediction internally)
     try:
-        scores_multi = lightning_trainer.evaluate(dataset, [metric], transformers)
+        scores_multi = lightning_trainer_pred.evaluate(dataset, [metric], transformers)
         print(f"Multi-GPU evaluation successful!")
         print(f"Multi-GPU ROC score: {scores_multi.get('mean-roc_auc_score', 'N/A')}")
     except Exception as e:
