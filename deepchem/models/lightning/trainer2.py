@@ -113,6 +113,8 @@ class DeepChemLightningTrainer:
             self.trainer_kwargs['log_every_n_steps'] = max(
                 1, dataset_size // (self.batch_size * 2))
 
+        self.lightning_model = self.lightning_model.train()
+
         # Create data module
         data_module = DeepChemLightningDataModule(dataset=train_dataset,
                                                   batch_size=self.batch_size,
@@ -130,7 +132,8 @@ class DeepChemLightningTrainer:
                 transformers: List[Transformer] = [],
                 other_output_types: Optional[OneOrMany[str]] = None,
                 num_workers: int = 0,
-                uncertainty: Optional[bool] = None):
+                uncertainty: Optional[bool] = None,
+                ckpt_path: Optional[str] = None):
         """Run inference on the provided dataset.
 
         Parameters
@@ -145,6 +148,8 @@ class DeepChemLightningTrainer:
             Number of workers for DataLoader.
         uncertainty: Optional[bool], default None
             Whether to compute uncertainty estimates.
+        ckpt_path: Optional[str], default None
+            Path to a checkpoint file to load model weights from.
 
         Returns
         -------
@@ -159,7 +164,7 @@ class DeepChemLightningTrainer:
                                                   batch_size=self.batch_size,
                                                   num_workers=num_workers,
                                                   model=self.model)
-        self.lightning_model.eval()
+        self.lightning_model = self.lightning_model.eval()
         # Run prediction
 
         self.lightning_model._transformers = transformers
@@ -169,7 +174,8 @@ class DeepChemLightningTrainer:
 
         predictions = self.trainer.predict(self.lightning_model,
                                            datamodule=data_module,
-                                           return_predictions=True)
+                                           return_predictions=True,
+                                           ckpt_path=ckpt_path)
 
         return predictions
 
@@ -180,7 +186,7 @@ class DeepChemLightningTrainer:
                  per_task_metrics: bool = False,
                  use_sample_weights: bool = False,
                  n_classes: int = 2,
-                 num_workers: int = 4) -> Union[Score, Tuple[Score, Score]]:
+                 num_workers: int = 0) -> Union[Score, Tuple[Score, Score]]:
         """
         Evaluate model performance on a dataset using Lightning for multi-GPU support.
         
@@ -202,7 +208,7 @@ class DeepChemLightningTrainer:
             If set, use per-sample weights.
         n_classes: int, default 2
             Number of unique classes for classification metrics.
-        num_workers: int, default 4
+        num_workers: int, default 0
             Number of workers for DataLoader.
             
         Returns
@@ -215,7 +221,7 @@ class DeepChemLightningTrainer:
         processed_metrics = _process_metric_input(metrics)
         
         # Get predictions using Lightning's multi-GPU predict
-        y_pred = self.predict(dataset, transformers=transformers, num_workers=0)
+        y_pred = self.predict(dataset, transformers=transformers, num_workers=num_workers)
         
         # Concatenate predictions from all batches
         if isinstance(y_pred, list) and len(y_pred) > 0:
