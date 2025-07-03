@@ -156,8 +156,12 @@ class DeepChemLightningTrainer:
         List
             Predictions from the model.
         """
-        # if not hasattr(self, 'trainer'):
-        self.trainer = L.Trainer(**self.trainer_kwargs)
+        # Create a single-GPU trainer for prediction to avoid multi-GPU prediction issues
+        predict_trainer_kwargs = self.trainer_kwargs.copy()
+        predict_trainer_kwargs['devices'] = 1  # Force single GPU for prediction
+        predict_trainer_kwargs['accelerator'] = 'gpu' if 'cuda' in str(predict_trainer_kwargs.get('accelerator', 'auto')).lower() else 'auto'
+        
+        self.trainer = L.Trainer(**predict_trainer_kwargs)
 
         # Create data module
         data_module = DeepChemLightningDataModule(dataset=dataset,
@@ -223,21 +227,65 @@ class DeepChemLightningTrainer:
         # Get predictions using Lightning's multi-GPU predict
         y_pred = self.predict(dataset, transformers=transformers, num_workers=num_workers)
         
-        # Concatenate predictions from all batches
-        if isinstance(y_pred, list) and len(y_pred) > 0:
-            if isinstance(y_pred[0], np.ndarray):
-                y_pred = np.concatenate(y_pred, axis=0)
-            else:
-                # Handle case where predictions are lists of arrays
-                y_pred = np.concatenate([np.array(pred) for pred in y_pred], axis=0)
+        # Debug: Print prediction structure to understand multi-GPU output
+        print(f"Debug: y_pred type: {type(y_pred)}")
+        if isinstance(y_pred, list):
+            print(f"Debug: y_pred length: {len(y_pred)}")
+            for i, item in enumerate(y_pred):
+                print(f"Debug: y_pred[{i}] type: {type(item)}, shape: {getattr(item, 'shape', 'no shape')}")
         
-        # Ensure y_pred is a numpy array
-        if not isinstance(y_pred, np.ndarray):
-            y_pred = np.array(y_pred) if y_pred is not None else np.array([])
+        # Handle multi-GPU prediction concatenation robustly
+        if isinstance(y_pred, list) and len(y_pred) > 0:
+            # First, collect all prediction arrays
+            all_predictions = []
+            
+            def collect_arrays(obj):
+                """Recursively collect numpy arrays from nested structures."""
+                if isinstance(obj, np.ndarray):
+                    all_predictions.append(obj)
+                elif isinstance(obj, (list, tuple)):
+                    for item in obj:
+                        collect_arrays(item)
+                elif obj is not None:
+                    # Convert other types to numpy arrays
+                    try:
+                        arr = np.array(obj)
+                        if arr.size > 0:
+                            all_predictions.append(arr)
+                    except:
+                        pass
+            
+            # Collect all arrays recursively
+            collect_arrays(y_pred)
+            
+            # Debug: Print collected arrays info
+            print(f"Debug: Collected {len(all_predictions)} prediction arrays")
+            for i, arr in enumerate(all_predictions):
+                print(f"Debug: Array {i} shape: {arr.shape}")
+            
+            # Concatenate all collected arrays
+            if all_predictions:
+                y_pred = np.concatenate(all_predictions, axis=0)
+            else:
+                y_pred = np.array([])
+        else:
+            # Ensure y_pred is a numpy array
+            if not isinstance(y_pred, np.ndarray):
+                y_pred = np.array(y_pred) if y_pred is not None else np.array([])
         
         # Get true labels and weights
         y = dataset.y
         w = dataset.w
+        
+        # Debug: Print final shapes
+        print(f"Debug: Final y_pred shape: {y_pred.shape}")
+        print(f"Debug: Dataset y shape: {y.shape}")
+        print(f"Debug: Dataset w shape: {w.shape}")
+        
+        # Ensure predictions match dataset size - trim if necessary due to multi-GPU padding
+        if len(y_pred) > len(y):
+            print(f"Debug: Trimming predictions from {len(y_pred)} to {len(y)}")
+            y_pred = y_pred[:len(y)]
         
         # Apply transformers to true labels (undo transforms)
         output_transformers = [t for t in transformers if t.transform_y]

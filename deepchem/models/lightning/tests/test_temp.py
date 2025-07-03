@@ -188,10 +188,14 @@ def test_gcn_overfit_with_lightning_trainer(gcn_model, gcn_data):
     This validates that the Lightning training loop works correctly and the model
     can learn from the data by achieving good performance on the training set.
     """
+    import lightning as L
     from deepchem.models.lightning.trainer2 import DeepChemLightningTrainer
     from deepchem.models.tests.test_graph_models import get_dataset
     from deepchem.feat import MolGraphConvFeaturizer
-
+    import numpy as np
+    L.seed_everything(42)
+    np.random.seed(42)  # Ensure reproducibility for numpy operations
+    torch.manual_seed(42)  # Ensure reproducibility for PyTorch operations
     # Use the same synthetic dataset approach as the reference test
     # Use num_tasks=1 to match the fixture gcn_model which has n_tasks=1
     tasks, dataset, transformers, metric = get_dataset('classification', featurizer=MolGraphConvFeaturizer(), num_tasks=1)
@@ -209,9 +213,9 @@ def test_gcn_overfit_with_lightning_trainer(gcn_model, gcn_data):
     lightning_trainer = DeepChemLightningTrainer(
         model=gcn_model,
         batch_size=10,  # Same as reference
-        max_epochs=70,  # Reduce for debugging
+        max_epochs=100,  # Reduce for debugging
         accelerator="cuda",
-        devices=-1,  # Use single GPU for debugging
+        devices=-1,  # Use 2 GPUs to test the multi-GPU fix
         logger=False,
         enable_checkpointing=False,
         enable_progress_bar=False,
