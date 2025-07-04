@@ -1,6 +1,7 @@
 import pytest
 import torch
 import deepchem as dc
+import numpy as np
 try:
     import lightning as L
     from deepchem.models.lightning.trainer2 import DeepChemLightningTrainer
@@ -11,7 +12,7 @@ except ImportError as e:
 
 
 @pytest.mark.torch
-def test_multitask_classifier():
+def test_multitask_classifier_reload_correctness():
     L.seed_everything(42)
     tasks, datasets, _ = dc.molnet.load_clintox()
     _, valid_dataset, _ = datasets
@@ -72,7 +73,7 @@ def test_multitask_classifier():
 
 
 @pytest.mark.torch
-def test_gcn_model():
+def test_gcn_model_reload_correctness():
     L.seed_everything(42)
     featurizer = dc.feat.MolGraphConvFeaturizer()
     tasks, all_dataset, transformers = dc.molnet.load_bace_classification(
@@ -116,7 +117,6 @@ def test_gcn_model():
                                                        accelerator="cuda",
                                                        devices=-1,
                                                        log_every_n_steps=1,
-                                                       strategy="fsdp",
                                                        fast_dev_run=True)
 
     # get a some 10 weights for assertion

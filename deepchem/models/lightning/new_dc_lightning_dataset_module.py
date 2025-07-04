@@ -3,7 +3,7 @@ import lightning as L
 import deepchem as dc
 from deepchem.data import Dataset
 from typing import Optional, Callable
-from deepchem.models.lightning.utils import collate_dataset_wrapper, IndexDiskDatasetWrapper
+from deepchem.utils import collate_dataset_wrapper, IndexDiskDatasetWrapper
 from deepchem.models.torch_models import TorchModel
 
 

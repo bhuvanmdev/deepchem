@@ -92,7 +92,7 @@ class DeepChemLightningTrainer:
         # Create the Lightning module
         self.lightning_model = DeepChemLightningModule(model)
 
-    def fit(self, train_dataset: Dataset, num_workers: int = 4):
+    def fit(self, train_dataset: Dataset, num_workers: int = 4, ckpt_path: Optional[str] = None):
         """Train the model on the provided dataset.
 
         Parameters
@@ -125,7 +125,7 @@ class DeepChemLightningTrainer:
         self.trainer = L.Trainer(**self.trainer_kwargs)
 
         # Train the model
-        self.trainer.fit(self.lightning_model, data_module)
+        self.trainer.fit(self.lightning_model, data_module, ckpt_path=ckpt_path)
 
     def predict(self,
                 dataset: Dataset,
@@ -133,8 +133,7 @@ class DeepChemLightningTrainer:
                 other_output_types: Optional[OneOrMany[str]] = None,
                 num_workers: int = 0,
                 uncertainty: Optional[bool] = None,
-                ckpt_path: Optional[str] = None,
-                use_multi_gpu: bool = False):
+                ckpt_path: Optional[str] = None):
         """Run inference on the provided dataset.
 
         Parameters
@@ -160,21 +159,8 @@ class DeepChemLightningTrainer:
             Predictions from the model.
         """
         
-        if not use_multi_gpu:
-            # Default behavior: force single-GPU prediction for correct ordering
-            predict_trainer_kwargs = self.trainer_kwargs.copy()
-            predict_trainer_kwargs['devices'] = 1  # Force single GPU
-            predict_trainer_kwargs['strategy'] = 'auto'  # Use simple strategy for prediction
-            print("[WARNING] Using single GPU for prediction to ensure correct sample ordering")
-            print("[INFO] Set use_multi_gpu=True to enable experimental multi-GPU prediction")
-            self.trainer = L.Trainer(**predict_trainer_kwargs)
-        else:
-            # Multi-GPU prediction - use DDP instead of FSDP for compatibility
-            predict_trainer_kwargs = self.trainer_kwargs.copy()
-            if predict_trainer_kwargs.get('strategy') == 'fsdp':
-                predict_trainer_kwargs['strategy'] = 'ddp'  # Use DDP for prediction instead of FSDP
-                print("[INFO] Switching from FSDP to DDP strategy for multi-GPU prediction")
-            self.trainer = L.Trainer(**predict_trainer_kwargs)
+
+        self.trainer = L.Trainer(**self.trainer_kwargs)
 
         # Create data module
         data_module = DeepChemLightningDataModule(dataset=dataset,
@@ -237,77 +223,20 @@ class DeepChemLightningTrainer:
             Dictionary mapping metric names to scores. If per_task_metrics is True,
             returns a tuple of (multitask_scores, all_task_scores).
         """
+        import deepchem.trans
         # Process input metrics
         processed_metrics = _process_metric_input(metrics)
         
-        # Get predictions using Lightning's multi-GPU predict
-        y_pred = self.predict(dataset, transformers=transformers, num_workers=num_workers)
-        
-        # Debug: Print prediction structure to understand multi-GPU output
-        print(f"Debug: y_pred type: {type(y_pred)}")
-        if isinstance(y_pred, list):
-            print(f"Debug: y_pred length: {len(y_pred)}")
-            for i, item in enumerate(y_pred):
-                print(f"Debug: y_pred[{i}] type: {type(item)}, shape: {getattr(item, 'shape', 'no shape')}")
-        
-        # Handle multi-GPU prediction concatenation robustly
-        if isinstance(y_pred, list) and len(y_pred) > 0:
-            # First, collect all prediction arrays
-            all_predictions = []
-            
-            def collect_arrays(obj):
-                """Recursively collect numpy arrays from nested structures."""
-                if isinstance(obj, np.ndarray):
-                    all_predictions.append(obj)
-                elif isinstance(obj, (list, tuple)):
-                    for item in obj:
-                        collect_arrays(item)
-                elif obj is not None:
-                    # Convert other types to numpy arrays
-                    try:
-                        arr = np.array(obj)
-                        if arr.size > 0:
-                            all_predictions.append(arr)
-                    except:
-                        pass
-            
-            # Collect all arrays recursively
-            collect_arrays(y_pred)
-            
-            # Debug: Print collected arrays info
-            print(f"Debug: Collected {len(all_predictions)} prediction arrays")
-            for i, arr in enumerate(all_predictions):
-                print(f"Debug: Array {i} shape: {arr.shape}")
-            
-            # Concatenate all collected arrays
-            if all_predictions:
-                y_pred = np.concatenate(all_predictions, axis=0)
-            else:
-                y_pred = np.array([])
-        else:
-            # Ensure y_pred is a numpy array
-            if not isinstance(y_pred, np.ndarray):
-                y_pred = np.array(y_pred) if y_pred is not None else np.array([])
-        
-        # Get true labels and weights
         y = dataset.y
         w = dataset.w
-        
-        # Debug: Print final shapes
-        print(f"Debug: Final y_pred shape: {y_pred.shape}")
-        print(f"Debug: Dataset y shape: {y.shape}")
-        print(f"Debug: Dataset w shape: {w.shape}")
-        
-        # Ensure predictions match dataset size - trim if necessary due to multi-GPU padding
-        if len(y_pred) > len(y):
-            print(f"Debug: Trimming predictions from {len(y_pred)} to {len(y)}")
-            y_pred = y_pred[:len(y)]
-        
-        # Apply transformers to true labels (undo transforms)
+
         output_transformers = [t for t in transformers if t.transform_y]
-        if output_transformers:
-            import deepchem.trans
-            y = deepchem.trans.undo_transforms(y, output_transformers)
+        y = deepchem.trans.undo_transforms(y, output_transformers)
+        
+        # Get predictions using Lightning's multi-GPU predict
+        y_pred = self.predict(dataset, transformers=output_transformers, num_workers=num_workers)
+        y_pred = np.concatenate([p for p in y_pred])
+
         
         n_tasks = len(dataset.get_task_names())
         
@@ -356,52 +285,6 @@ class DeepChemLightningTrainer:
         
         self.trainer.save_checkpoint(filepath)
 
-    def restore(self, checkpoint_path: str):
-        """Restore model from checkpoint using Lightning's native loading.
-
-        Parameters
-        ----------
-        checkpoint_path: str
-            Path to the checkpoint file.
-        """
-        # Load Lightning module with all hyperparameters and state
-        self.lightning_model = DeepChemLightningModule.load_from_checkpoint(
-            checkpoint_path, model=self.model)
-        # Keep the original batch_size from trainer initialization
-
-    def resume_training(self, 
-                       train_dataset, 
-                       checkpoint_path: str,
-                       num_workers: int = 4):
-        """Resume training from a checkpoint.
-
-        Parameters
-        ----------
-        train_dataset: Dataset
-            Training dataset.
-        checkpoint_path: str
-            Path to checkpoint to resume from.
-        num_workers: int, default 4
-            Number of workers for DataLoader.
-        """
-        # Set log_every_n_steps if not provided
-        if 'log_every_n_steps' not in self.trainer_kwargs:
-            dataset_size = len(train_dataset)
-            self.trainer_kwargs['log_every_n_steps'] = max(
-                1, dataset_size // (int(self.batch_size) * 2))
-
-        # Create data module
-        data_module = DeepChemLightningDataModule(dataset=train_dataset,
-                                                  batch_size=int(self.batch_size),
-                                                  num_workers=num_workers,
-                                                  model=self.model)
-
-        # Create trainer
-        self.trainer = L.Trainer(**self.trainer_kwargs)
-
-        # Resume training from checkpoint
-        self.trainer.fit(self.lightning_model, data_module, ckpt_path=checkpoint_path)
-
     @staticmethod
     def load_checkpoint(filepath: str,
                         model: TorchModel,
@@ -431,71 +314,7 @@ class DeepChemLightningTrainer:
                                            **trainer_kwargs)
         
         # Load the checkpoint
-        trainer.restore(filepath)
+        trainer.lightning_model = DeepChemLightningModule.load_from_checkpoint(
+            filepath, model=model)
         
         return trainer
-
-    def _post_process_multi_gpu_predictions(self, predictions: List, expected_size: int):
-        """
-        Post-process multi-GPU predictions to handle potential ordering issues.
-        
-        This method attempts to clean up multi-GPU prediction results by:
-        1. Flattening nested prediction structures
-        2. Trimming to expected dataset size
-        3. Removing potential duplicates from DDP padding
-        
-        Parameters
-        ----------
-        predictions: List
-            Raw predictions from multi-GPU trainer.predict()
-        expected_size: int
-            Expected number of samples in the dataset
-            
-        Returns
-        -------
-        np.ndarray or List
-            Cleaned predictions
-        """
-        print(f"[DEBUG] Post-processing multi-GPU predictions")
-        print(f"[DEBUG] Raw predictions type: {type(predictions)}, length: {len(predictions) if hasattr(predictions, '__len__') else 'N/A'}")
-        
-        # Collect all prediction arrays
-        all_predictions = []
-        
-        def collect_arrays(obj):
-            """Recursively collect numpy arrays from nested structures."""
-            if isinstance(obj, np.ndarray):
-                all_predictions.append(obj)
-            elif isinstance(obj, (list, tuple)):
-                for item in obj:
-                    collect_arrays(item)
-            elif obj is not None:
-                # Convert other types to numpy arrays
-                try:
-                    arr = np.array(obj)
-                    if arr.size > 0:
-                        all_predictions.append(arr)
-                except:
-                    pass
-        
-        # Collect all arrays recursively
-        collect_arrays(predictions)
-        
-        print(f"[DEBUG] Collected {len(all_predictions)} prediction arrays")
-        for i, arr in enumerate(all_predictions):
-            print(f"[DEBUG] Array {i} shape: {arr.shape}")
-        
-        # Concatenate and trim to expected size
-        if all_predictions:
-            concatenated = np.concatenate(all_predictions, axis=0)
-            
-            # Trim to expected size (removes duplicates from DDP padding)
-            if len(concatenated) > expected_size:
-                print(f"[DEBUG] Trimming predictions from {len(concatenated)} to {expected_size}")
-                concatenated = concatenated[:expected_size]
-            
-            print(f"[DEBUG] Final prediction shape: {concatenated.shape}")
-            return concatenated
-        else:
-            print("[WARNING] No predictions found in multi-GPU output")
-            return np.array([])
