@@ -115,7 +115,7 @@ class _TorchDiskDataset(torch.utils.data.IterableDataset):  # type: ignore
                 shard_indices,
                 batch_size=self.batch_size,
                 epochs=self.epochs,
-                deterministic=self.deterministic):
+                deterministic=True):#self.deterministic):
             if self.batch_size is None:
                 for i in range(X.shape[0]):
                     yield (X[i], y[i], w[i], ids[i])
