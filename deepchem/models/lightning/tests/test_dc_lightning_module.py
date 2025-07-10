@@ -45,7 +45,7 @@ class TestDCLightningModule(unittest.TestCase):
                                     learning_rate=0.0001)
 
         molnet_dataloader = DCLightningDatasetModule(valid_dataset, 6,
-                                                     collate_dataset_wrapper)
+                                                     collate_dataset_wrapper, 2)
         lightning_module = DCLightningModule(model)
         trainer = L.Trainer(max_epochs=1, devices=-1, strategy="ddp")
         trainer.fit(lightning_module, molnet_dataloader)
@@ -70,7 +70,7 @@ class TestDCLightningModule(unittest.TestCase):
         sample = dc.data.NumpyDataset(X=X, y=train_labels)
 
         smiles_datasetmodule = DCLightningDatasetModule(
-            sample, 2, collate_dataset_wrapper)
+            sample, 2, collate_dataset_wrapper, 2)
 
         lightning_module = DCLightningModule(model)
         trainer = L.Trainer(max_epochs=1, devices=-1, strategy="ddp")
