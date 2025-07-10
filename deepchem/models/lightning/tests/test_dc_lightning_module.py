@@ -45,9 +45,9 @@ class TestDCLightningModule(unittest.TestCase):
                                     learning_rate=0.0001)
 
         molnet_dataloader = DCLightningDatasetModule(valid_dataset, 6,
-                                                     collate_dataset_wrapper, 2)
+                                                     collate_dataset_wrapper)
         lightning_module = DCLightningModule(model)
-        trainer = L.Trainer(max_epochs=1, devices=-1, strategy="ddp")
+        trainer = L.Trainer(max_epochs=1, devices=-1, strategy="fsdp")
         trainer.fit(lightning_module, molnet_dataloader)
 
     @unittest.skipIf(PYTORCH_LIGHTNING_IMPORT_FAILED,
@@ -70,8 +70,8 @@ class TestDCLightningModule(unittest.TestCase):
         sample = dc.data.NumpyDataset(X=X, y=train_labels)
 
         smiles_datasetmodule = DCLightningDatasetModule(
-            sample, 2, collate_dataset_wrapper, 2)
+            sample, 2, collate_dataset_wrapper)
 
         lightning_module = DCLightningModule(model)
-        trainer = L.Trainer(max_epochs=1, devices=-1, strategy="ddp")
+        trainer = L.Trainer(max_epochs=1, devices=-1, strategy="fsdp")
         trainer.fit(lightning_module, smiles_datasetmodule)

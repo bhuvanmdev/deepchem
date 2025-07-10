@@ -1656,7 +1656,7 @@ class DiskDataset(Dataset):
                                  batch_size: Optional[int] = None,
                                  epochs: int = 1,
                                  deterministic: bool = False,
-                                 pad_batches: bool = False) -> Iterator[Batch]:
+                                 pad_batches: bool = True) -> Iterator[Batch]:
         """Get an object that iterates over batches from a restricted set of shards."""
 
         def iterate(dataset: DiskDataset, batch_size: Optional[int],
