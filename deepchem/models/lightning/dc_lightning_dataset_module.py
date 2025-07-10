@@ -69,5 +69,7 @@ class DCLightningDatasetModule(L.LightningDataModule):
             collate_fn=self.collate_fn,
             shuffle=False,
             num_workers=self.num_workers,
+            pin_memory=True,
+            drop_last=True,
         )
         return dataloader

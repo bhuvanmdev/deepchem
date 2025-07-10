@@ -93,47 +93,71 @@ class _TorchDiskDataset(torch.utils.data.IterableDataset):  # type: ignore
 
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
+        
+        # Determine which shards this worker should handle
         n_shards = self.disk_dataset.get_number_shards()
+        
         if worker_info is None:
+            # Single-process data loading
             process_id = 0
             num_processes = 1
         else:
+            # Multi-process data loading
             process_id = worker_info.id
             num_processes = worker_info.num_workers
-
+            
+        # Handle distributed training (DDP/FSDP)
         if dist.is_initialized():
-            # process_id += dist.get_rank() * num_processes
-            # num_processes *= dist.get_world_size()
-            rank = dist.get_rank()
-            world_size = dist.get_world_size()
-        # first_shard = (process_id * n_shards) // num_processes
-        # last_shard = ((process_id + 1) * n_shards) // num_processes
-        # if first_shard == last_shard:
-        #     return
-
-        # shard_indices = list(range(first_shard, last_shard))
-            # Each process gets a unique set of shards
-            shards_for_this_rank = np.array_split(range(n_shards), world_size)[rank]
-
-            # Further split the shards among the workers for this rank
-            shards_for_this_worker = np.array_split(shards_for_this_rank, num_processes)[process_id]
-        else:
-            # Non-distributed training, split shards among workers
-            shards_for_this_worker = np.array_split(range(n_shards), num_processes)[process_id]
-        # for X, y, w, ids in self.disk_dataset._iterbatches_from_shards(
-        #         shard_indices,
-        #         batch_size=self.batch_size,
-        #         epochs=self.epochs,
-        #         deterministic=True):#self.deterministic):
-        #     if self.batch_size is None:
-        #         for i in range(X.shape[0]):
-        #             yield (X[i], y[i], w[i], ids[i])
-        #     else:
-        #         yield (X, y, w, ids)
-        for shard_idx in shards_for_this_worker:
-            X, y, w, ids = self.disk_dataset.get_shard(shard_idx)
-            for i in range(X.shape[0]):
-                yield X[i], y[i], w[i], ids[i]
+            # Each GPU rank gets a portion of the data
+            process_id += dist.get_rank() * num_processes
+            num_processes *= dist.get_world_size()
+            
+        # Calculate which shards this worker should process
+        # This ensures even distribution across all workers
+        first_shard = (process_id * n_shards) // num_processes
+        last_shard = ((process_id + 1) * n_shards) // num_processes
+        
+        # If this worker gets no shards, return empty iterator
+        # This is safe because DataLoader will handle the coordination
+        if first_shard >= last_shard:
+            return iter([])
+            
+        shard_indices = list(range(first_shard, last_shard))
+        
+        # Iterate over epochs
+        for epoch in range(self.epochs):
+            # Shuffle shard order if not deterministic
+            if not self.deterministic:
+                np.random.shuffle(shard_indices)
+                
+            # Process each shard assigned to this worker
+            for shard_idx in shard_indices:
+                # Load the entire shard into memory
+                # Note: This is synchronous - no thread pool complexity
+                X, y, w, ids = self.disk_dataset.get_shard(shard_idx)
+                
+                # Handle empty shards gracefully
+                if X.shape[0] == 0:
+                    continue
+                    
+                # Shuffle samples within the shard if not deterministic
+                n_samples = X.shape[0]
+                if not self.deterministic:
+                    # Create random permutation for this shard
+                    perm = np.random.permutation(n_samples)
+                else:
+                    # Keep original order
+                    perm = np.arange(n_samples)
+                
+                # Yield individual samples
+                for i in perm:
+                    # Extract individual sample
+                    sample_x = X[i]
+                    sample_y = y[i] if y is not None else None
+                    sample_w = w[i] if w is not None else None
+                    sample_id = ids[i]
+                    
+                    yield (sample_x, sample_y, sample_w, sample_id)
 
 
 class _TorchImageDataset(torch.utils.data.IterableDataset):  # type: ignore
