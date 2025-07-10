@@ -65,11 +65,9 @@ class DCLightningDatasetModule(L.LightningDataModule):
         """
         dataloader = torch.utils.data.DataLoader(
             self.train_dataset,
-            batch_size=None,
+            batch_size=1,
             collate_fn=self.collate_fn,
             shuffle=False,
             num_workers=self.num_workers,
-            persistent_workers=True,
-            pin_memory=True,
         )
         return dataloader
