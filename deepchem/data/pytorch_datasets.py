@@ -102,25 +102,38 @@ class _TorchDiskDataset(torch.utils.data.IterableDataset):  # type: ignore
             num_processes = worker_info.num_workers
 
         if dist.is_initialized():
-            process_id += dist.get_rank() * num_processes
-            num_processes *= dist.get_world_size()
+            # process_id += dist.get_rank() * num_processes
+            # num_processes *= dist.get_world_size()
+            rank = dist.get_rank()
+            world_size = dist.get_world_size()
+        # first_shard = (process_id * n_shards) // num_processes
+        # last_shard = ((process_id + 1) * n_shards) // num_processes
+        # if first_shard == last_shard:
+        #     return
 
-        first_shard = (process_id * n_shards) // num_processes
-        last_shard = ((process_id + 1) * n_shards) // num_processes
-        if first_shard == last_shard:
-            return
+        # shard_indices = list(range(first_shard, last_shard))
+            # Each process gets a unique set of shards
+            shards_for_this_rank = np.array_split(range(n_shards), world_size)[rank]
 
-        shard_indices = list(range(first_shard, last_shard))
-        for X, y, w, ids in self.disk_dataset._iterbatches_from_shards(
-                shard_indices,
-                batch_size=self.batch_size,
-                epochs=self.epochs,
-                deterministic=True):#self.deterministic):
-            if self.batch_size is None:
-                for i in range(X.shape[0]):
-                    yield (X[i], y[i], w[i], ids[i])
-            else:
-                yield (X, y, w, ids)
+            # Further split the shards among the workers for this rank
+            shards_for_this_worker = np.array_split(shards_for_this_rank, num_processes)[process_id]
+        else:
+            # Non-distributed training, split shards among workers
+            shards_for_this_worker = np.array_split(range(n_shards), num_processes)[process_id]
+        # for X, y, w, ids in self.disk_dataset._iterbatches_from_shards(
+        #         shard_indices,
+        #         batch_size=self.batch_size,
+        #         epochs=self.epochs,
+        #         deterministic=True):#self.deterministic):
+        #     if self.batch_size is None:
+        #         for i in range(X.shape[0]):
+        #             yield (X[i], y[i], w[i], ids[i])
+        #     else:
+        #         yield (X, y, w, ids)
+        for shard_idx in shards_for_this_worker:
+            X, y, w, ids = self.disk_dataset.get_shard(shard_idx)
+            for i in range(X.shape[0]):
+                yield X[i], y[i], w[i], ids[i]
 
 
 class _TorchImageDataset(torch.utils.data.IterableDataset):  # type: ignore
