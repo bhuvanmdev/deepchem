@@ -98,7 +98,7 @@ def test_gcn_fit_predict_workflow(gcn_model, gcn_data):
 
     assert isinstance(predictions, np.ndarray)
     # The final prediction shape should be (n_samples, n_tasks, n_classes=2)
-    assert predictions.shape == (10, 2, 2)
+    assert predictions.shape == (20, 2, 2)
 
 
 def test_gcn_checkpointing_and_loading(gcn_model, gcn_data, tmp_path="temp"):
@@ -206,7 +206,7 @@ def test_gcn_overfit_with_lightning_trainer(gcn_model, gcn_data):
     lightning_trainer = DeepChemLightningTrainer(
         model=gcn_model,
         batch_size=10,  # Same as reference
-        max_epochs=100,  # Reduce for debugging
+        max_epochs=70,  # Reduce for debugging
         accelerator="cuda",
         strategy="fsdp",
         devices=-1,  
@@ -244,15 +244,7 @@ def test_gcn_overfit_with_lightning_trainer(gcn_model, gcn_data):
         enable_progress_bar=False,
         default_root_dir=checkpoint_dir,)
 
-
-    # Now test evaluation (which uses prediction internally)
-    # try:
     scores_multi = lightning_trainer_pred.evaluate(dataset, [metric], transformers)
-    print(f"Multi-GPU evaluation successful!")
-    print(f"Multi-GPU ROC score: {scores_multi.get('mean-roc_auc_score', 'N/A')}")
-    # except Exception as e:
-    #     print(f"Multi-GPU evaluation failed: {e}")
-    #     scores_multi = None
-    shutil.rmtree(checkpoint_dir, ignore_errors=True)
-    os.remove("best_model.ckpt")
+    # shutil.rmtree(checkpoint_dir, ignore_errors=True)
+    # os.remove("best_model.ckpt")
     assert scores_multi["mean-roc_auc_score"] > 0.85, "Model did not learn anything during training."

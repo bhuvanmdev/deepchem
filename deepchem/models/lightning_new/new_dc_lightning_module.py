@@ -8,7 +8,7 @@ from deepchem.utils.typing import OneOrMany
 from deepchem.trans import Transformer
 
 
-class DeepChemLightningModulee(L.LightningModule):
+class DeepChemLightningModule(L.LightningModule):
     """A PyTorch Lightning wrapper for DeepChem models.
 
     This module integrates DeepChem's models with PyTorch Lightning's training loop,
@@ -20,6 +20,7 @@ class DeepChemLightningModulee(L.LightningModule):
       - A training step method that computes and logs a loss value.
       - A prediction step method that handles uncertainty and additional outputs.
       - Configuration of optimizers and (optional) learning rate schedulers.
+      - Multi-GPU support using all_gather for combining results across devices.
 
     Parameters
     ----------
@@ -46,23 +47,46 @@ class DeepChemLightningModulee(L.LightningModule):
     >>> # Wrap it in a Lightning module
     >>> lightning_module = DeepChemLightningModule(model)
     >>>
-    >>> # Create a Lightning trainer
-    >>> trainer = L.Trainer(max_epochs=10, accelerator='auto')
+    >>> # Create a Lightning trainer for multi-GPU training
+    >>> trainer = L.Trainer(max_epochs=10, accelerator='auto', devices=2)
     >>>
     >>> # Prepare your data as PyTorch Lightning DataModule or DataLoader
     >>> # train_dataloader = ...  # Your training data
     >>> # val_dataloader = ...    # Your validation data
     >>>
-    >>> # Train the model
+    >>> # Train the model (predictions will be gathered across all GPUs)
     >>> # trainer.fit(lightning_module, train_dataloader, val_dataloader)
     >>>
-    >>> # Make predictions
+    >>> # Make predictions (results automatically combined from all GPUs)
     >>> # predictions = trainer.predict(lightning_module, test_dataloader)
+
+    Multi-GPU Usage with all_gather:
+    --------------------------------
+    This module uses PyTorch Lightning's all_gather method to combine results
+    from multiple GPUs during prediction. The all_gather method ensures that:
+    
+    1. During training: Loss values from all GPUs are gathered for monitoring
+    2. During prediction: Predictions from all GPUs are combined into a single result
+    3. Results are automatically synchronized across all devices
+    
+    The all_gather implementation handles:
+    - Tensors: Concatenates results from all GPUs along the batch dimension
+    - Lists/Tuples: Combines collections from all devices
+    - Single GPU: Passes through results unchanged
+    
+    Example of manual all_gather usage:
+    >>> def custom_epoch_end(self):
+    ...     # Gather custom metrics from all GPUs
+    ...     local_metric = torch.tensor(some_value)
+    ...     all_metrics = self.all_gather(local_metric)
+    ...     global_mean = torch.mean(all_metrics)
+    ...     self.log("global_metric", global_mean)
 
     Notes
     -----
     For more information, see:
       - PyTorch Lightning Documentation: https://pytorch-lightning.readthedocs.io/en/stable/api/pytorch_lightning.core.LightningModule.html?highlight=LightningModule
+      - All-gather documentation: https://lightning.ai/docs/pytorch/latest/common/lightning_module.html#all-gather
     """
 
     def __init__(self, model: TorchModel):
@@ -114,6 +138,7 @@ class DeepChemLightningModulee(L.LightningModule):
         if isinstance(inputs, list) and len(inputs) == 1:
             inputs = inputs[0]
         outputs = self.model(inputs)
+        
         if isinstance(self.dc_model, ModularTorchModel):
             loss = self.dc_model.loss_func(inputs, labels, weights)
         elif isinstance(self.dc_model, TorchModel):
@@ -122,6 +147,15 @@ class DeepChemLightningModulee(L.LightningModule):
             if self._loss_outputs is not None:
                 outputs = [outputs[i] for i in self._loss_outputs]
             loss = self._loss_fn(outputs, labels, weights)
+        
+        # This can be useful for monitoring training across multiple devices
+        if self.trainer.world_size > 1:
+            # Gather loss values from all GPUs for logging/monitoring
+            all_losses = self.all_gather(loss.detach())
+            # if isinstance(all_losses, torch.Tensor) and all_losses.dim() > 0:
+            mean_loss_across_gpus = torch.mean(all_losses)
+            self.log("train_loss_all_gpus", mean_loss_across_gpus)
+        
         self.log("train_loss", loss.item(), prog_bar=True, sync_dist=True)
         return loss
 
@@ -145,14 +179,34 @@ class DeepChemLightningModulee(L.LightningModule):
         Any
             Model predictions, with optional uncertainty estimates if configured.
         """
-        results, variances = None, None
         inputs, _, _ = batch
         if isinstance(inputs, list) and len(inputs) == 1:
             inputs = inputs[0]
+        
+        # Forward pass through the model
         output_values = self.model(inputs)
-        output_values = [torch.cat(self.all_gather(output_values)).view(-1)]
         if isinstance(output_values, torch.Tensor):
             output_values = [output_values]
+
+        # Use all_gather to combine predictions from all GPUs
+        # This ensures all predictions are gathered across all devices
+        gathered_outputs = []
+        for output in output_values:
+            # Shape will be [world_size, batch_size, ...] for tensors
+            all_outputs = self.all_gather(output)
+            if isinstance(all_outputs, torch.Tensor):
+                if all_outputs.dim() > output.dim():
+                    # Concatenate along batch dimension from all GPUs
+                    gathered_output = torch.cat([all_outputs[i] for i in range(all_outputs.size(0))], dim=0)
+                else:
+                    # Single GPU case
+                    gathered_output = all_outputs
+
+            # Handle the case where all_gather returns a tensor
+            gathered_outputs.append(gathered_output)
+
+        output_values = gathered_outputs
+
         if self.uncertainty and self.output_types:
             raise ValueError(
                 'This model cannot compute uncertainties and other output types simultaneously. Please invoke one at a time.'
@@ -174,9 +228,11 @@ class DeepChemLightningModulee(L.LightningModule):
                     'This model cannot compute other outputs since no other output_types were specified.'
                 )
 
+        # Convert to numpy arrays
         output_values = [t.detach().cpu().numpy() for t in output_values]
 
         # Apply transformers and record results
+        results, variances = None, None
         if self.uncertainty and self._variance_outputs is not None:
             var = [output_values[i] for i in self._variance_outputs]
             if variances is None:
@@ -246,13 +302,15 @@ class DeepChemLightningModulee(L.LightningModule):
             return [py_optimizer], [lr_schedule]
 
         return py_optimizer
+    
+
 
 if __name__ == "__main__":
     import deepchem as dc
     import numpy as np
     from deepchem.models import MultitaskClassifier
     from deepchem.models.lightning.new_dc_lightning_dataset_module import DeepChemLightningDataModule
-    from deepchem.models.lightning.new_dc_lightning_module import DeepChemLightningModule
+    # from deepchem.models.lightning.new_dc_lightning_module import DeepChemLightningModule
     import lightning as L
 
     # Load Clintox dataset
@@ -309,4 +367,3 @@ if __name__ == "__main__":
     #         print("Prediction shape:", first_pred[0].shape)
     #     else:
     #         print("Prediction output type:", type(first_pred))
- 
