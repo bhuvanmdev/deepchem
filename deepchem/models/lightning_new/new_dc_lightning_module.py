@@ -148,14 +148,6 @@ class DeepChemLightningModule(L.LightningModule):
                 outputs = [outputs[i] for i in self._loss_outputs]
             loss = self._loss_fn(outputs, labels, weights)
         
-        # This can be useful for monitoring training across multiple devices
-        if self.trainer.world_size > 1:
-            # Gather loss values from all GPUs for logging/monitoring
-            all_losses = self.all_gather(loss.detach())
-            # if isinstance(all_losses, torch.Tensor) and all_losses.dim() > 0:
-            mean_loss_across_gpus = torch.mean(all_losses)
-            self.log("train_loss_all_gpus", mean_loss_across_gpus)
-        
         self.log("train_loss", loss.item(), prog_bar=True, sync_dist=True)
         return loss
 
@@ -302,68 +294,7 @@ class DeepChemLightningModule(L.LightningModule):
             return [py_optimizer], [lr_schedule]
 
         return py_optimizer
+        
     
 
 
-if __name__ == "__main__":
-    import deepchem as dc
-    import numpy as np
-    from deepchem.models import MultitaskClassifier
-    from deepchem.models.lightning.new_dc_lightning_dataset_module import DeepChemLightningDataModule
-    # from deepchem.models.lightning.new_dc_lightning_module import DeepChemLightningModule
-    import lightning as L
-
-    # Load Clintox dataset
-    tasks, datasets, _ = dc.molnet.load_clintox()
-    _, valid_dataset, _ = datasets
-    print("len of datasets:", len(valid_dataset.X))
-    # Create a DeepChem MultitaskClassifier model
-    model = MultitaskClassifier(
-        n_tasks=len(tasks),
-        n_features=1024,
-        layer_sizes=[1000],
-        dropouts=0.2,
-        learning_rate=0.0001,
-        batch_size=2,
-        device="cpu"
-    )
-
-    # Prepare the Lightning DataModule
-    molnet_dataloader = DeepChemLightningDataModule(valid_dataset, 2,model=model)
-
-    # Wrap the DeepChem model in the Lightning module
-    lightning_module = DeepChemLightningModule(model)
-
-    # Create a PyTorch Lightning Trainer
-    trainer = L.Trainer(max_epochs=1, devices=-1, strategy="fsdp", enable_checkpointing=True)
-
-    trainer.fit(lightning_module, molnet_dataloader)
-
-    # trainer = L.Trainer(max_epochs=1, devices=-1, strategy="fsdp", detect_anomaly=True)
-    model = MultitaskClassifier(
-        n_tasks=len(tasks),
-        n_features=1024,
-        layer_sizes=[1000],
-        dropouts=0.2,
-        learning_rate=0.0001,
-        batch_size=2,
-        device="cpu"
-    )
-    # Fit the model
-    # trainer.fit(lightning_module, molnet_dataloader)
-    lightning_module = DeepChemLightningModule(model)
-    # Run prediction on the validation dataset
-    predictions = trainer.predict(lightning_module, molnet_dataloader)
-    print("Predictions:", predictions[0].shape)
-    predictions = np.concatenate([p for p in predictions])
-    print("All predictions shape:", predictions.shape)
-    # Print the shape of the first prediction output
-    # if predictions:
-    #     # Each item in predictions is a numpy array (batched output)
-    #     first_pred = predictions[0]
-    #     if isinstance(first_pred, np.ndarray):
-    #         print("Prediction shape:", first_pred.shape)
-    #     elif isinstance(first_pred, list) and len(first_pred) > 0 and isinstance(first_pred[0], np.ndarray):
-    #         print("Prediction shape:", first_pred[0].shape)
-    #     else:
-    #         print("Prediction output type:", type(first_pred))

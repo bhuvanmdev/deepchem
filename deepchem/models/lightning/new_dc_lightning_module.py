@@ -154,7 +154,8 @@ class DeepChemLightningModule(L.LightningModule):
     def predict_step(self, batch: Tuple[Any, Any, Any], batch_idx: int):
         """Perform a prediction step with optional support for uncertainty estimates and data transformations.
 
-        This method refers from _predict method form TorchModel.
+        This method returns predictions for a single batch along with batch indices to enable
+        proper ordering when aggregating results from multiple GPUs.
 
         Parameters
         ----------
@@ -168,75 +169,52 @@ class DeepChemLightningModule(L.LightningModule):
 
         Returns
         -------
-        Any
-            Model predictions, with optional uncertainty estimates if configured.
+        Dict[str, Any]
+            Dictionary containing:
+            - 'predictions': Model predictions for this batch
+            - 'batch_idx': Original batch index for ordering
+            - 'start_idx': Starting sample index in the dataset
+            - 'end_idx': Ending sample index in the dataset
         """
-        inputs, _, _ = batch
-        if isinstance(inputs, list) and len(inputs) == 1:
-            inputs = inputs[0]
-        
-        # Forward pass through the model
-        output_values = self.model(inputs)
-        if isinstance(output_values, torch.Tensor):
-            output_values = [output_values]
-
-        # Use all_gather to combine predictions from all GPUs
-        # This ensures all predictions are gathered across all devices
-        gathered_outputs = []
-        for output in output_values:
-            # Shape will be [world_size, batch_size, ...] for tensors
-            all_outputs = self.all_gather(output)
-            if isinstance(all_outputs, torch.Tensor):
-                if all_outputs.dim() > output.dim():
-                    # Concatenate along batch dimension from all GPUs
-                    gathered_output = torch.cat([all_outputs[i] for i in range(all_outputs.size(0))], dim=0)
-                else:
-                    # Single GPU case
-                    gathered_output = all_outputs
-
-            # Handle the case where all_gather returns a tensor
-            gathered_outputs.append(gathered_output)
-
-        output_values = gathered_outputs
-
-        if self.uncertainty and self.output_types:
+        results: Optional[List[List[np.ndarray]]] = None
+        variances: Optional[List[List[np.ndarray]]] = None
+        if self.uncertainty and (self.other_output_types is not None):
             raise ValueError(
                 'This model cannot compute uncertainties and other output types simultaneously. Please invoke one at a time.'
             )
-
         if self.uncertainty:
             if self._variance_outputs is None or len(
                     self._variance_outputs) == 0:
                 raise ValueError('This model cannot compute uncertainties')
-            if (self._prediction_outputs is not None and len(
-                    self._variance_outputs) != len(self._prediction_outputs)):
+            if len(self._variance_outputs) != len(self._prediction_outputs):
                 raise ValueError(
                     'The number of variances must exactly match the number of outputs'
                 )
-
         if self.other_output_types:
             if self._other_outputs is None or len(self._other_outputs) == 0:
                 raise ValueError(
                     'This model cannot compute other outputs since no other output_types were specified.'
                 )
-
-        # Convert to numpy arrays
+        inputs, _, _ = batch
+        # Invoke the model.
+        if isinstance(inputs, list) and len(inputs) == 1:
+            inputs = inputs[0]
+        output_values = self.model(inputs)
+        if isinstance(output_values, torch.Tensor):
+            output_values = [output_values]
         output_values = [t.detach().cpu().numpy() for t in output_values]
 
-        # Apply transformers and record results
-        results, variances = None, None
-        if self.uncertainty and self._variance_outputs is not None:
+        # Apply tranformers and record results.
+        if self.uncertainty:
             var = [output_values[i] for i in self._variance_outputs]
             if variances is None:
                 variances = [var]
             else:
                 for i, t in enumerate(var):
                     variances[i].append(t)
-
         access_values = []
         if self.other_output_types:
-            if self._other_outputs is not None:
-                access_values += self._other_outputs
+            access_values += self._other_outputs
         elif self._prediction_outputs is not None:
             access_values += self._prediction_outputs
 
@@ -253,24 +231,21 @@ class DeepChemLightningModule(L.LightningModule):
                 output_values = [
                     undo_transforms(output_values[0], self._transformers)
                 ]
-
         if results is None:
             results = [[] for i in range(len(output_values))]
         for i, t in enumerate(output_values):
             results[i].append(t)
 
-        # Concatenate arrays to create the final results
+        # Concatenate arrays to create the final results.
         final_results = []
         final_variances = []
         if results is not None:
             for r in results:
                 final_results.append(np.concatenate(r, axis=0))
-
         if self.uncertainty and variances is not None:
             for v in variances:
                 final_variances.append(np.concatenate(v, axis=0))
             return zip(final_results, final_variances)
-
         if len(final_results) == 1:
             return final_results[0]
         else:
@@ -294,3 +269,72 @@ class DeepChemLightningModule(L.LightningModule):
             return [py_optimizer], [lr_schedule]
 
         return py_optimizer
+    
+if __name__ == "__main__":
+    import deepchem as dc
+    import numpy as np
+    from deepchem.models import MultitaskClassifier
+    from deepchem.models.lightning.new_dc_lightning_dataset_module import DeepChemLightningDataModule
+    # from deepchem.models.lightning.new_dc_lightning_module import DeepChemLightningModule
+    import lightning as L
+
+    # Load Clintox dataset
+    tasks, datasets, _ = dc.molnet.load_clintox()
+    _, valid_dataset, _ = datasets
+    print("len of datasets:", len(valid_dataset.X))
+    # Create a DeepChem MultitaskClassifier model
+    model = MultitaskClassifier(
+        n_tasks=len(tasks),
+        n_features=1024,
+        layer_sizes=[1000],
+        dropouts=0.2,
+        learning_rate=0.0001,
+        batch_size=2,
+        device="cpu"
+    )
+
+    # Prepare the Lightning DataModule
+    molnet_dataloader = DeepChemLightningDataModule(valid_dataset, 2,model=model)
+
+    # Wrap the DeepChem model in the Lightning module
+    lightning_module = DeepChemLightningModule(model)
+
+    # Create a PyTorch Lightning Trainer
+    trainer = L.Trainer(max_epochs=70, devices=-1, strategy="fsdp")
+
+    trainer.fit(lightning_module, molnet_dataloader)
+
+    # trainer = L.Trainer(max_epochs=1, devices=-1, strategy="fsdp", detect_anomaly=True)
+    model = MultitaskClassifier(
+        n_tasks=len(tasks),
+        n_features=1024,
+        layer_sizes=[1000],
+        dropouts=0.2,
+        learning_rate=0.0001,
+        batch_size=2,
+        device="cpu"
+    )
+    # Fit the model
+    # trainer.fit(lightning_module, molnet_dataloader)
+    lightning_module = DeepChemLightningModule(model)
+    
+    # Create a single-GPU trainer for prediction to ensure complete, ordered results
+    prediction_trainer = L.Trainer(devices=1, accelerator="auto")
+    
+    # Run prediction on the validation dataset
+    predictions = prediction_trainer.predict(lightning_module, molnet_dataloader)
+    print("Predictions type:", type(predictions))
+    if predictions is not None and len(predictions) > 0:
+        print("Number of prediction batches:", len(predictions))
+        try:
+            concatenated_predictions = np.concatenate([p for p in predictions])
+            print("All predictions shape:", concatenated_predictions.shape)
+            print("Expected shape: ({}, 2)".format(len(valid_dataset)))
+        except Exception as e:
+            print("Error concatenating predictions:", e)
+            print("First few prediction types:", [type(p) for p in predictions[:3]])
+    else:
+        print("No predictions returned or empty predictions")
+    
+    print("\n=== Testing with DeepChemLightningTrainer (Recommended) ===")
+    
