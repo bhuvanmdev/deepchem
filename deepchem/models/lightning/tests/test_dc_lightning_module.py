@@ -21,9 +21,6 @@ except ImportError:
 pytestmark = pytest.mark.skipif(PYTORCH_LIGHTNING_IMPORT_FAILED,
                                 reason="PyTorch Lightning is not installed")
 
-np.random.seed(42)
-torch.manual_seed(42)
-L.seed_everything(42)
 
 
 @pytest.fixture(scope="function")

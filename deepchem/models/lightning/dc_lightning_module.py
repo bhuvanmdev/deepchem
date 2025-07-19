@@ -76,6 +76,7 @@ class DCLightningModule(L.LightningModule):
         """
         super().__init__()
         self.pt_model = dc_model.model
+        self.model = self.pt_model
         self.dc_model = dc_model
         self.loss_mod = dc_model.loss
         self.optimizer = dc_model.optimizer
@@ -89,6 +90,7 @@ class DCLightningModule(L.LightningModule):
         self.learning_rate = dc_model.learning_rate
         self._transformers: List[Transformer] = []
         self.other_output_types: Optional[OneOrMany[str]] = None
+        self._built = True
 
     def configure_optimizers(self):
         """Configure optimizers and learning rate schedulers.
@@ -174,76 +176,10 @@ class DCLightningModule(L.LightningModule):
             - list of numpy arrays for multi-output models
             - zip of (predictions, variances) if uncertainty is enabled
         """
-        results: Optional[List[List[np.ndarray]]] = None
-        variances: Optional[List[List[np.ndarray]]] = None
-        if self.uncertainty and (self.other_output_types is not None):
-            raise ValueError(
-                'This model cannot compute uncertainties and other output types simultaneously. Please invoke one at a time.'
-            )
-        if self.uncertainty:
-            if self._variance_outputs is None or len(
-                    self._variance_outputs) == 0:
-                raise ValueError('This model cannot compute uncertainties')
-            if len(self._variance_outputs) != len(self._prediction_outputs):
-                raise ValueError(
-                    'The number of variances must exactly match the number of outputs'
-                )
-        if self.other_output_types:
-            if self._other_outputs is None or len(self._other_outputs) == 0:
-                raise ValueError(
-                    'This model cannot compute other outputs since no other output_types were specified.'
-                )
-        inputs, _, _ = batch
-        # Invoke the model.
-        if isinstance(inputs, list) and len(inputs) == 1:
-            inputs = inputs[0]
-        output_values = self.pt_model(inputs)
-        if isinstance(output_values, torch.Tensor):
-            output_values = [output_values]
-        output_values = [t.detach().cpu().numpy() for t in output_values]
-
-        # Apply tranformers and record results.
-        if self.uncertainty:
-            var = [output_values[i] for i in self._variance_outputs]
-            if variances is None:
-                variances = [var]
-            else:
-                for i, t in enumerate(var):
-                    variances[i].append(t)
-        access_values = []
-        if self.other_output_types:
-            access_values += self._other_outputs
-        elif self._prediction_outputs is not None:
-            access_values += self._prediction_outputs
-
-        if len(access_values) > 0:
-            output_values = [output_values[i] for i in access_values]
-
-        if len(self._transformers) > 0:
-            if len(output_values) > 1:
-                raise ValueError(
-                    "predict() does not support Transformers for models with multiple outputs."
-                )
-            elif len(output_values) == 1:
-                output_values = [
-                    undo_transforms(output_values[0], self._transformers)
-                ]
-        if results is None:
-            results = [[] for i in range(len(output_values))]
-        for i, t in enumerate(output_values):
-            results[i].append(t)
-
-        # Concatenate arrays to create the final results.
-        final_results = []
-        final_variances = []
-        if results is not None:
-            for r in results:
-                final_results.append(np.concatenate(r, axis=0))
-        if self.uncertainty and variances is not None:
-            for v in variances:
-                final_variances.append(np.concatenate(v, axis=0))
-            return zip(final_results, final_variances)
-        if len(final_results) == 1:
-            return final_results[0]
-        else:
-            return final_results
+        return TorchModel._predict(
+            self=self,
+            generator=iter(batch),
+            uncertainty=self.uncertainty,
+            transformers=self._transformers,
+            other_output_types=self.other_output_types,
+        )
