@@ -6,7 +6,7 @@ import shutil
 import os
 try:
     import lightning as L
-    from deepchem.models.lightning_new.trainer import DeepChemLightningTrainer
+    from deepchem.models.lightning.trainer import DeepChemLightningTrainer
 except ImportError as e:
     print(f"DeepChem Lightning module not found: {e}")
     pytest.skip("DeepChem Lightning module not found, skipping tests.",
@@ -162,18 +162,15 @@ def test_gcn_overfit_with_lightning_trainer():
         device='cpu',
     )
 
-    # Define a custom checkpoint directory
-    checkpoint_dir = "my_custom_checkpoints"
     lightning_trainer = DeepChemLightningTrainer(
         model=gcn_model,
-        batch_size=10,  # Same as reference
-        max_epochs=100,  # Reduce for debugging
+        batch_size=10,
+        max_epochs=70,
         accelerator="cuda",
         strategy="fsdp",
         devices=-1,
         logger=False,
         enable_progress_bar=False,
-        default_root_dir=checkpoint_dir,  # Save checkpoints to this directory
     )
 
     # Train the model
@@ -196,7 +193,6 @@ def test_gcn_overfit_with_lightning_trainer():
     # Load weights from checkpoint
     lightning_trainer_pred = DeepChemLightningTrainer.load_checkpoint(
         "best_model.ckpt",
-        devices=1,
         model=gcn_model_pred,
         batch_size=10,
         accelerator="cuda",
@@ -208,5 +204,4 @@ def test_gcn_overfit_with_lightning_trainer():
                                                    transformers)
     shutil.rmtree(checkpoint_dir, ignore_errors=True)
     os.remove("best_model.ckpt")
-    assert scores_multi[
-        "mean-roc_auc_score"] > 0.85, "Model did not learn anything during training."
+    assert scores_multi["mean-roc_auc_score"] > 0.85, "Model did not learn anything during training."
