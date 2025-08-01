@@ -275,6 +275,6 @@ class DeepChemLightningTrainer:
 
         # Load the checkpoint
         trainer.lightning_model = DCLightningModule.load_from_checkpoint(
-            filepath, model=model)
+            filepath, dc_model=model)
 
         return trainer
