@@ -130,9 +130,6 @@ class DeepChemLightningTrainer:
             Predictions from the model.
         """
 
-        self.trainer_kwargs['devices'] = 1  # Ensure single GPU for prediction
-        self.trainer = L.Trainer(**self.trainer_kwargs)
-
         # Create data module
         data_module = DCLightningDatasetModule(dataset=dataset,
                                                   batch_size=self.batch_size,
