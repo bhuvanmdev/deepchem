@@ -193,6 +193,7 @@ def test_gcn_overfit_with_lightning_trainer():
     # Load weights from checkpoint
     lightning_trainer_pred = DeepChemLightningTrainer.load_checkpoint(
         "best_model.ckpt",
+        devices=1,
         model=gcn_model_pred,
         batch_size=10,
         accelerator="cuda",
