@@ -1,5 +1,4 @@
 from typing import Callable, Optional
-from enum import Enum
 import deepchem as dc
 import lightning as L
 import torch
@@ -8,12 +7,6 @@ from deepchem.models.torch_models import TorchModel
 import logging
 
 logger = logging.getLogger(__name__)
-
-
-class Stage(Enum):
-    """Enum representing different stages for dataset setup."""
-    FIT = "fit"
-    PREDICT = "predict"
 
 
 class DCLightningDatasetBatch:
@@ -52,70 +45,39 @@ class DCLightningDatasetModule(L.LightningDataModule):
         Parameters
         ----------
         dataset: dc.data.Dataset
-            A deepchem dataset.
+            A deepchem loaded dataset.
         batch_size: int
             Batch size for the dataloader.
         collate_fn: Callable
-            Method to collate instances across batch.
+            Custom collate function. Defaults to collate_dataset_wrapper.
         num_workers: int
             Number of workers to load data
         model: Optional[TorchModel], Defaults to None
-            DeepChem model instance required for proper data preprocessing in newer workflow.
-            The model provides custom `default_generator()` and `_prepare_batch()`
-            methods that are used by the collate function for model-specific data preprocessing.
-
-        Notes
-        -----
-        The `model` parameter was introduced to support a new workflow that addresses
-        stability issues in distributed training scenarios, particularly with PyTorch
-        Lightning's FSDP (Fully Sharded Data Parallel) strategy. The implementation
-        has two workflows:
-
-        1. **Legacy workflow** (when `model=None`): Uses the original `make_pytorch_dataset()`
-           method, which creates iterable datasets. This approach works great for DDP (Distributed Data Parallel Training),
-           but can cause deadlocks or instability in complex multi-process data loading
-           scenarios with FSDP.
-
-        2. **New workflow** (when `model` is provided): Uses `_TorchIndexDiskDataset` to
-           wrap the dataset with random-access indexing capabilities. This provides:
-
-           - **FSDP compatibility**: The map-style dataset interface (`__getitem__` and
-             `__len__`) is more robust for distributed training and avoids deadlocks
-             that can occur with iterator-based datasets in FSDP scenarios.
-
-           - **Model-specific data preprocessing**: Sometimes TorchModel subclasses often define
-             custom `default_generator()` and `_prepare_batch()` methods for specialized
-             data preprocessing. The collate function handles all data preprocessing by
-             utilizing these model-specific methods, ensuring proper data format and
-             transformations before it enters the train/prediction workflows.
+            DeepChem model for collate function, which is used to utilize the model's
+            `_prepare_batch` and `default_generator` method for preparing the batch data.
         """
         super().__init__()
         self._batch_size = batch_size
-
-        # Refer to the docstring for details on the two workflows.
         if model is None:
             self._dataset = dataset.make_pytorch_dataset(  # type: ignore[has-type]
                 batch_size=self._batch_size)
 
             self.collate_fn = collate_fn
-            self.DDP_ONLY_WORKFLOW = True
+            self.DEPRECATED_WORKFLOW = True
             logger.warning(
-                "Using DDP-only compatible workflow. Please provide the respective deepchem model to use the new workflow, that is compatible with both FSDP and DDP."
+                "Using deprecated workflow. Please provide the respective deepchem model to use the new workflow, this will be removed in future versions."
             )
         else:
             self._dataset = dc.data._TorchIndexDiskDataset(
                 dataset)  # type: ignore[arg-type]
-
-            # Since the model argument is provided, we assume that the user wants to use the FSDP-DDP compatible workflow, and hence replace the default generator-based collate function (collate_dataset_wrapper)
-            # with one that uses an indexable collate function (collate_dataset_fn).
             if collate_fn == collate_dataset_wrapper:
                 collate_fn = collate_dataset_fn
             self.collate_fn = lambda batch: collate_fn(batch_data=batch,
                                                        model=model)
-            self.DDP_ONLY_WORKFLOW = False
+            self.DEPRECATED_WORKFLOW = False
         self.num_workers = num_workers
 
-    def setup(self, stage: str):
+    def setup(self, stage):
         """Set up datasets for each stage.
 
         Parameters
@@ -123,9 +85,9 @@ class DCLightningDatasetModule(L.LightningDataModule):
         stage: str
             The stage to set up datasets for ('fit' or 'predict').
         """
-        if stage == Stage.FIT.value:
+        if stage == "fit":
             self.train_dataset = self._dataset
-        elif stage == Stage.PREDICT.value:
+        elif stage == "predict":
             self.predict_dataset = self._dataset
 
     def train_dataloader(self):
@@ -134,11 +96,10 @@ class DCLightningDatasetModule(L.LightningDataModule):
         Returns
         -------
         DataLoader
-            train dataloader to be used with DCLightningModule.
+            Pytorch DataLoader for train data.
         """
-        # In the fsdp-ddp compatible workflow, batching and shuffling is handled by torch.utils.data.DataLoader.
-        # In the DDP-only workflow, we set batch_size to None and shuffle to False, since both are handled by the _TorchDiskDataset(deepchem's iterative pytorch datalaoder).
-        if self.DDP_ONLY_WORKFLOW:
+        # In the newer workflow, batching is handles by DataLoader.
+        if self.DEPRECATED_WORKFLOW:
             batch_size = None
             shuffle = False
         else:
@@ -160,9 +121,9 @@ class DCLightningDatasetModule(L.LightningDataModule):
         Returns
         -------
         DataLoader
-            predict dataloader to be used with DCLightningModule.
+            PyTorch DataLoader for prediction data.
         """
-        if self.DDP_ONLY_WORKFLOW:
+        if self.DEPRECATED_WORKFLOW:
             batch_size = None
         else:
             batch_size = self._batch_size
@@ -172,6 +133,7 @@ class DCLightningDatasetModule(L.LightningDataModule):
             batch_size=batch_size,
             collate_fn=self.collate_fn,
             shuffle=False,  # Critical: never shuffle during prediction
-            num_workers=self.num_workers)
+            num_workers=self.num_workers,
+            drop_last=True)
 
         return dataloader

@@ -2,10 +2,10 @@ import torch
 import lightning as L  # noqa
 from deepchem.models.torch_models import ModularTorchModel, TorchModel
 import numpy as np
-from deepchem.utils.typing import List, OneOrMany, Any, LossFn
-from typing import Optional, Union, Tuple
+from deepchem.utils.typing import List, OneOrMany, Any, Tuple
+from typing import Optional
 from deepchem.trans import Transformer, undo_transforms
-from deepchem.models.optimizers import LearningRateSchedule, Optimizer
+from deepchem.models.optimizers import LearningRateSchedule
 
 
 class DCLightningModule(L.LightningModule):
@@ -71,24 +71,24 @@ class DCLightningModule(L.LightningModule):
 
         Parameters
         ----------
-        dc_model: TorchModel or ModularTorchModel
+        dc_model: deepchem.models.torch_models.torch_model.TorchModel
             TorchModel to be wrapped inside the lightning module.
         """
         super().__init__()
         self.save_hyperparameters(ignore=['dc_model'])
         self.dc_model = dc_model
         self.pt_model = dc_model.model
-        self.loss: LossFn = dc_model._loss_fn
-        self.optimizer: Optimizer = dc_model.optimizer
-        self._prediction_outputs: Optional[
-            List[int]] = dc_model._prediction_outputs
-        self._loss_outputs: Optional[List[int]] = dc_model._loss_outputs
-        self._variance_outputs: Optional[List[int]] = dc_model._variance_outputs
-        self._other_outputs: Optional[List[int]] = dc_model._other_outputs
-        self.uncertainty: bool = getattr(dc_model, 'uncertainty', False)
-        self.learning_rate: Union[float,
-                                  LearningRateSchedule] = dc_model.learning_rate
-        self.transformers: List[Transformer] = []
+        self.loss_mod = dc_model.loss
+        self.optimizer = dc_model.optimizer
+        self.output_types = dc_model.output_types
+        self._prediction_outputs = dc_model._prediction_outputs
+        self._loss_outputs = dc_model._loss_outputs
+        self._variance_outputs = dc_model._variance_outputs
+        self._other_outputs = dc_model._other_outputs
+        self._loss_fn = dc_model._loss_fn
+        self.uncertainty = getattr(dc_model, 'uncertainty', False)
+        self.learning_rate = dc_model.learning_rate
+        self._transformers: List[Transformer] = []
         self.other_output_types: Optional[OneOrMany[str]] = None
 
     def configure_optimizers(self):
@@ -96,40 +96,37 @@ class DCLightningModule(L.LightningModule):
 
         Returns
         -------
-        Union[torch.optim.Optimizer, Tuple[List[torch.optim.Optimizer], List[torch.optim.lr_scheduler.LRScheduler]]]
-            PyTorch optimizer or tuple containing lists of optimizers and schedulers.
+        Union[torch.optim.Optimizer, List]
+            PyTorch optimizer or list containing optimizer and scheduler.
         """
         self.dc_model._built = True
-        pytorch_optimizer = self.optimizer._create_pytorch_optimizer(
+        py_optimizer = self.optimizer._create_pytorch_optimizer(
             self.pt_model.parameters())
 
         if isinstance(self.optimizer.learning_rate, LearningRateSchedule):
             lr_schedule = self.optimizer.learning_rate._create_pytorch_schedule(
-                pytorch_optimizer)
-            return [pytorch_optimizer], [lr_schedule]
+                py_optimizer)
+            return [py_optimizer], [lr_schedule]
 
-        return pytorch_optimizer
+        return py_optimizer
 
-    def training_step(self, batch: Union[Tuple[Any, Any, Any], Any],
-                      batch_idx: int):
+    def training_step(self, batch, batch_idx):
         """Perform a training step.
 
         Parameters
         ----------
-        batch: Union[Tuple[Any, Any, Any], Any]
-            A tensor, tuple or list containing inputs, labels, and weights.
-        batch_idx: int
-            Integer displaying index of this batch
+        batch: A tensor, tuple or list.
+        batch_idx: Integer displaying index of this batch
+        optimizer_idx: When using multiple optimizers, this argument will also be present.
 
         Returns
         -------
-        torch.Tensor
-            The computed loss tensor for this training step.
+        loss_outputs: outputs of losses.
         """
         if hasattr(batch, 'batch_list'):
             # If batch is a DCLightningDatasetBatch, extract the batch list.
-            batch_list = batch.batch_list  # type: ignore
-            inputs, labels, weights = self.dc_model._prepare_batch(batch_list)
+            batch = batch.batch_list
+            inputs, labels, weights = self.dc_model._prepare_batch(batch)
         else:
             inputs, labels, weights = batch
 
@@ -146,11 +143,11 @@ class DCLightningModule(L.LightningModule):
 
             if self.dc_model._loss_outputs is not None:
                 outputs = [outputs[i] for i in self.dc_model._loss_outputs]
-            loss = self.loss(outputs, labels, weights)
+            loss = self._loss_fn(outputs, labels, weights)
 
         self.log(
             "train_loss",
-            loss,
+            loss.item(),
             on_epoch=True,
             sync_dist=True,
             reduce_fx="mean",
@@ -165,9 +162,6 @@ class DCLightningModule(L.LightningModule):
 
         This method was copied from TorchModel._predict and adapted for Lightning's predict_step interface.
 
-        Changes include:
-        - removed the `self.dc_model._prepare_batch` call since `batch` is already prepared.
-
         Parameters
         ----------
         batch: Tuple[Any, Any, Any]
@@ -180,7 +174,7 @@ class DCLightningModule(L.LightningModule):
 
         Returns
         -------
-        Union[np.ndarray, List[np.ndarray], zip]
+        Any
             Model predictions for this batch. Can be:
             - numpy array for single output models
             - list of numpy arrays for multi-output models
@@ -196,8 +190,7 @@ class DCLightningModule(L.LightningModule):
             if self._variance_outputs is None or len(
                     self._variance_outputs) == 0:
                 raise ValueError('This model cannot compute uncertainties')
-            if self._prediction_outputs is None or len(
-                    self._variance_outputs) != len(self._prediction_outputs):
+            if len(self._variance_outputs) != len(self._prediction_outputs):
                 raise ValueError(
                     'The number of variances must exactly match the number of outputs'
                 )
@@ -210,52 +203,45 @@ class DCLightningModule(L.LightningModule):
         # Invoke the model.
         if isinstance(inputs, list) and len(inputs) == 1:
             inputs = inputs[0]
-        output_values: Union[torch.Tensor,
-                             List[torch.Tensor]] = self.pt_model(inputs)
+        output_values = self.pt_model(inputs)
         if isinstance(output_values, torch.Tensor):
             output_values = [output_values]
-        output_values_np: List[np.ndarray] = [
-            t.detach().cpu().numpy() for t in output_values
-        ]
+        output_values = [t.detach().cpu().numpy() for t in output_values]
 
         # Apply tranformers and record results.
         if self.uncertainty:
-            if self._variance_outputs is not None:
-                var: List[np.ndarray] = [
-                    output_values_np[i] for i in self._variance_outputs
-                ]
-                if variances is None:
-                    variances = [var]
-                else:
-                    for i, t in enumerate(var):
-                        variances[i].append(t)
-        access_values: List[int] = []
+            var = [output_values[i] for i in self._variance_outputs]
+            if variances is None:
+                variances = [var]
+            else:
+                for i, t in enumerate(var):
+                    variances[i].append(t)
+        access_values = []
         if self.other_output_types:
-            if self._other_outputs is not None:
-                access_values += self._other_outputs
+            access_values += self._other_outputs
         elif self._prediction_outputs is not None:
             access_values += self._prediction_outputs
 
         if len(access_values) > 0:
-            output_values_np = [output_values_np[i] for i in access_values]
+            output_values = [output_values[i] for i in access_values]
 
-        if len(self.transformers) > 0:
-            if len(output_values_np) > 1:
+        if len(self._transformers) > 0:
+            if len(output_values) > 1:
                 raise ValueError(
                     "predict() does not support Transformers for models with multiple outputs."
                 )
-            elif len(output_values_np) == 1:
-                output_values_np = [
-                    undo_transforms(output_values_np[0], self.transformers)
+            elif len(output_values) == 1:
+                output_values = [
+                    undo_transforms(output_values[0], self._transformers)
                 ]
         if results is None:
-            results = [[] for i in range(len(output_values_np))]
-        for i, t in enumerate(output_values_np):
+            results = [[] for i in range(len(output_values))]
+        for i, t in enumerate(output_values):
             results[i].append(t)
 
         # Concatenate arrays to create the final results.
-        final_results: List[np.ndarray] = []
-        final_variances: List[np.ndarray] = []
+        final_results = []
+        final_variances = []
         if results is not None:
             for r in results:
                 final_results.append(np.concatenate(r, axis=0))

@@ -1,5 +1,5 @@
-from deepchem.models.lightning.new_dc_lightning_dataset_module import DeepChemLightningDataModule
-from deepchem.models.lightning.new_dc_lightning_module import DeepChemLightningModule
+from deepchem.models.lightning.dc_lightning_dataset_module import DCLightningDatasetModule
+from deepchem.models.lightning.dc_lightning_module import DCLightningModule
 from deepchem.models.torch_models import TorchModel
 from rdkit import rdBase
 import deepchem as dc
@@ -66,7 +66,7 @@ class DeepChemLightningTrainer:
     >>> predictions = trainer.predict(valid_dataset)
     >>> trainer.save_checkpoint("model.ckpt")
     >>> # To reload:
-    >>> trainer2 = DeepChemLightningTrainer.load_checkpoint("model.ckpt", model=model)
+    >>> trainer2 = DeepChemLightningTrainer.load_checkpoint("model.ckpt", dc_model=model)
     """
 
     def __init__(self,
@@ -87,10 +87,10 @@ class DeepChemLightningTrainer:
         if 'max_epochs' not in trainer_kwargs:
             self.trainer_kwargs['max_epochs'] = 100
 
-        # TODO: set up logger if not provided
+        # TODO: set up sdditional loggers, default parameters, etc. for Lightning Trainer 
 
         # Create the Lightning module
-        self.lightning_model = DeepChemLightningModule(model)
+        self.lightning_model = DCLightningModule(model)
 
     def fit(self, train_dataset: Dataset, num_workers: int = 4, ckpt_path: Optional[str] = None):
         """Train the model on the provided dataset.
@@ -116,7 +116,7 @@ class DeepChemLightningTrainer:
         self.lightning_model = self.lightning_model.train()
 
         # Create data module
-        data_module = DeepChemLightningDataModule(dataset=train_dataset,
+        data_module = DCLightningDatasetModule(dataset=train_dataset,
                                                   batch_size=int(self.batch_size),
                                                   num_workers=num_workers,
                                                   model=self.model)
@@ -133,7 +133,8 @@ class DeepChemLightningTrainer:
                 other_output_types: Optional[OneOrMany[str]] = None,
                 num_workers: int = 0,
                 uncertainty: Optional[bool] = None,
-                ckpt_path: Optional[str] = None):
+                ckpt_path: Optional[str] = None,
+                use_single_gpu_for_prediction: bool = True):
         """Run inference on the provided dataset.
 
         Parameters
@@ -150,8 +151,9 @@ class DeepChemLightningTrainer:
             Whether to compute uncertainty estimates.
         ckpt_path: Optional[str], default None
             Path to a checkpoint file to load model weights from.
-        use_multi_gpu: bool, default False
-            Whether to use multi-GPU prediction. If False, forces single-GPU for correct ordering.
+        use_single_gpu_for_prediction: bool, default False
+            Whether to force single-GPU prediction for correct ordering.
+            When True, uses only 1 device regardless of trainer configuration.
 
         Returns
         -------
@@ -159,11 +161,18 @@ class DeepChemLightningTrainer:
             Predictions from the model.
         """
         
+        # Create trainer kwargs for prediction
+        trainer_kwargs = self.trainer_kwargs.copy()
+        
+        # Force single GPU if requested (important for evaluation)
+        if use_single_gpu_for_prediction:
+            trainer_kwargs['devices'] = 1 # maintains order of predictions
+            trainer_kwargs['strategy'] = 'auto'
 
-        self.trainer = L.Trainer(**self.trainer_kwargs)
+        self.trainer = L.Trainer(**trainer_kwargs)
 
         # Create data module
-        data_module = DeepChemLightningDataModule(dataset=dataset,
+        data_module = DCLightningDatasetModule(dataset=dataset,
                                                   batch_size=int(self.batch_size),
                                                   num_workers=num_workers,
                                                   model=self.model)
@@ -181,9 +190,8 @@ class DeepChemLightningTrainer:
                                            return_predictions=True,
                                            ckpt_path=ckpt_path)
 
-
-
         return predictions
+
 
     def evaluate(self,
                  dataset: Dataset,
@@ -233,8 +241,10 @@ class DeepChemLightningTrainer:
         output_transformers = [t for t in transformers if t.transform_y]
         y = deepchem.trans.undo_transforms(y, output_transformers)
         
-        # Get predictions using Lightning's multi-GPU predict
-        y_pred = self.predict(dataset, transformers=output_transformers, num_workers=num_workers)
+        y_pred = self.predict(dataset, 
+                            transformers=output_transformers, 
+                            num_workers=num_workers)
+
         y_pred = np.concatenate([p for p in y_pred])
 
         
@@ -314,7 +324,7 @@ class DeepChemLightningTrainer:
                                            **trainer_kwargs)
         
         # Load the checkpoint
-        trainer.lightning_model = DeepChemLightningModule.load_from_checkpoint(
-            filepath, model=model)
+        trainer.lightning_model = DCLightningModule.load_from_checkpoint(
+            filepath, dc_model=model)
         
         return trainer

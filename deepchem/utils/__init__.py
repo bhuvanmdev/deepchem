@@ -167,7 +167,7 @@ try:
 
     from deepchem.utils.optimizer_utils import LambOptimizer
 
-    from deepchem.utils.lightning_utils import IndexDiskDatasetWrapper, collate_dataset_wrapper
 except ModuleNotFoundError as e:
     logger.warning(
         f'Skipped loading some Pytorch utilities, missing a dependency. {e}')
+from deepchem.utils.lightning_utils import collate_dataset_fn

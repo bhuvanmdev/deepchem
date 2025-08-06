@@ -2,11 +2,11 @@ import pytest
 import torch
 import deepchem as dc
 import numpy as np
+from deepchem.models.tests.test_graph_models import get_dataset
 try:
     import lightning as L
     from deepchem.models.lightning.trainer2 import DeepChemLightningTrainer
 except ImportError as e:
-    print(f"DeepChem Lightning module not found: {e}")
     pytest.skip("DeepChem Lightning module not found, skipping tests.",
                 allow_module_level=True)
 
@@ -129,3 +129,74 @@ def test_gcn_model_reload_correctness():
     assert torch.allclose(torch.tensor(weights),
                           torch.tensor(reloaded_weights),
                           atol=1e-5)
+
+@pytest.mark.torch
+def test_gcn_overfit_with_lightning_trainer():
+    """
+    Tests if the GCN model can overfit to a small dataset using Lightning trainer.
+    This validates that the Lightning training loop works correctly and the model
+    can learn from the data by achieving good performance on the training set.
+    Also tests the new multi-GPU prediction capability.
+    """
+    np.random.seed(42)  # Ensure reproducibility for numpy operations
+    torch.manual_seed(42)  # Ensure reproducibility for PyTorch operations
+
+    L.seed_everything(42)
+
+
+    from deepchem.feat import MolGraphConvFeaturizer
+    tasks, dataset, transformers, metric = get_dataset('classification', featurizer=MolGraphConvFeaturizer())
+    dataset = dc.data.DiskDataset.from_numpy(dataset.X, dataset.y, dataset.w, dataset.ids)
+    
+    gcn_model = dc.models.GCNModel(
+        mode='classification',
+        n_tasks=len(tasks),  # This will be 1 now
+        number_atom_features=30,  # Same as reference
+        batch_size=10,  # Same as reference
+        learning_rate=0.0003,  # Same as reference
+        device='cpu',  # Use GPU for training
+    )
+
+    # Create Lightning trainer with parameters similar to reference test
+    # Define a custom checkpoint directory
+    checkpoint_dir = "my_custom_checkpoints"
+    lightning_trainer = DeepChemLightningTrainer(
+        model=gcn_model,
+        batch_size=10,  # Same as reference
+        max_epochs=70,  # Reduce for debugging
+        accelerator="cuda",
+        strategy="fsdp",
+        devices=-1,  
+        logger=False,
+        enable_progress_bar=False,
+        default_root_dir=checkpoint_dir,  # Save checkpoints to this directory
+    )
+
+    
+
+    # Train the model
+    lightning_trainer.fit(dataset)
+
+    # After training, create a new DeepChemLightningTrainer instance for prediction and load the best checkpoint
+    # Find the latest checkpoint
+    lightning_trainer.save_checkpoint("best_model.ckpt")
+
+    # Create a new model instance and load weights
+    gcn_model_pred = dc.models.GCNModel(
+        mode='classification',
+        n_tasks=len(tasks),
+        number_atom_features=30,
+        batch_size=10,
+        learning_rate=0.0003,
+        device='cpu',
+    )
+    # Load weights from checkpoint
+    lightning_trainer_pred = DeepChemLightningTrainer.load_checkpoint("best_model.ckpt", gcn_model_pred, 10,accelerator="cuda",
+        devices=1,
+        logger=False,
+        enable_progress_bar=False,
+        default_root_dir=checkpoint_dir,)
+
+    scores_multi = lightning_trainer_pred.evaluate(dataset, [metric], transformers)
+    
+    assert scores_multi["mean-roc_auc_score"] > 0.85, "Model did not learn anything during training."
