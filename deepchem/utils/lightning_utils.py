@@ -66,6 +66,9 @@ def collate_dataset_fn(batch_data: List[Tuple[Any, Any, Any, Any]], model):
     Y = [item[1] for item in batch_data]
     W = [item[2] for item in batch_data]
     ids = [item[3] for item in batch_data]
+    # if not isinstance(model, dc.models.torch_models.HuggingFaceModel):
     processed_batch = next(
         iter(model.default_generator(dc.data.NumpyDataset(X, Y, W, ids))))
+    # else:
+    # processed_batch = (X, Y, W)
     return model._prepare_batch(processed_batch)

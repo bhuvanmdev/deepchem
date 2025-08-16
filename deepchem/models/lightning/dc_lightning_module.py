@@ -140,13 +140,29 @@ class DCLightningModule(L.LightningModule):
         if isinstance(self.dc_model, ModularTorchModel):
             loss = self.dc_model.loss_func(inputs, labels, weights)
         elif isinstance(self.dc_model, TorchModel):
-            outputs = self.pt_model(inputs)
-            if isinstance(outputs, torch.Tensor):
-                outputs = [outputs]
+            # Check if this is a HuggingFace model that expects unpacked inputs
+            from deepchem.models.torch_models.hf_models import HuggingFaceModel
+            if isinstance(self.dc_model, HuggingFaceModel) and isinstance(inputs, dict):
+                outputs = self.pt_model(**inputs)
+                # HuggingFace models return a dict-like object with 'loss' key when labels are provided
+                if hasattr(outputs, 'loss') and outputs.loss is not None:
+                    loss = outputs.loss
+                else:
+                    # Fallback to manual loss computation if loss is not available
+                    logits = outputs.get('logits') if hasattr(outputs, 'get') else outputs.logits
+                    if isinstance(logits, torch.Tensor):
+                        logits = [logits]
+                    if self.dc_model._loss_outputs is not None:
+                        logits = [logits[i] for i in self.dc_model._loss_outputs]
+                    loss = self.loss(logits, labels, weights)
+            else:
+                outputs = self.pt_model(inputs)
+                if isinstance(outputs, torch.Tensor):
+                    outputs = [outputs]
 
-            if self.dc_model._loss_outputs is not None:
-                outputs = [outputs[i] for i in self.dc_model._loss_outputs]
-            loss = self.loss(outputs, labels, weights)
+                if self.dc_model._loss_outputs is not None:
+                    outputs = [outputs[i] for i in self.dc_model._loss_outputs]
+                loss = self.loss(outputs, labels, weights)
 
         self.log(
             "train_loss",
@@ -210,8 +226,30 @@ class DCLightningModule(L.LightningModule):
         # Invoke the model.
         if isinstance(inputs, list) and len(inputs) == 1:
             inputs = inputs[0]
-        output_values: Union[torch.Tensor,
-                             List[torch.Tensor]] = self.pt_model(inputs)
+        
+        # Check if this is a HuggingFace model that expects unpacked inputs
+        from deepchem.models.torch_models.hf_models import HuggingFaceModel
+
+        if isinstance(self.dc_model, HuggingFaceModel) and isinstance(inputs, dict):
+            # For other tasks, remove labels to avoid loss computation
+            # prediction_inputs = {}
+            # if 'input_ids' in inputs:
+            #     prediction_inputs['input_ids'] = inputs['input_ids']
+            # if 'attention_mask' in inputs:
+            #     prediction_inputs['attention_mask'] = inputs['attention_mask']
+                # Explicitly exclude 'labels' for prediction
+            
+            outputs = self.pt_model(**inputs)
+            # For HuggingFace models, extract logits from the output
+            if hasattr(outputs, 'logits'):
+                output_values = outputs.logits
+            elif hasattr(outputs, 'get'):
+                output_values = outputs.get('logits')
+            else:
+                # Fallback to the raw output if logits are not available
+                output_values = outputs
+        else:
+            output_values = self.pt_model(inputs)
         if isinstance(output_values, torch.Tensor):
             output_values = [output_values]
         output_values_np: List[np.ndarray] = [
