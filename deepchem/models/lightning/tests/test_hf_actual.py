@@ -1,7 +1,3 @@
-import os
-# Set tokenizers parallelism to false BEFORE any imports to avoid warnings
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
 import pytest
 import numpy as np
 import deepchem as dc
@@ -17,8 +13,6 @@ except ImportError:
 
 try:
     import lightning as L
-    from deepchem.models.lightning.dc_lightning_dataset_module import DCLightningDatasetModule
-    from deepchem.models.lightning.dc_lightning_module import DCLightningModule
     from deepchem.models.lightning.trainer import DeepChemLightningTrainer
     PYTORCH_LIGHTNING_IMPORT_FAILED = False
 except ImportError:
@@ -26,20 +20,19 @@ except ImportError:
 
 try:
     from deepchem.models.torch_models.chemberta import Chemberta
+    os.environ["TOKENIZERS_PARALLELISM"] = "false" # to avoid deadlocks in tokenization due to parallel processing already done by dataloader.
     CHEMBERTA_IMPORT_FAILED = False
 except ImportError:
     CHEMBERTA_IMPORT_FAILED = True
 
-# pytestmark = [
-#     pytest.mark.skipif(not gpu_available,
-#                        reason="No GPU available for testing"),
-#     pytest.mark.skipif(torch.cuda.device_count() < 2,
-#                        reason="FSDP testing requires at least 2 GPUs"),
-#     pytest.mark.skipif(PYTORCH_LIGHTNING_IMPORT_FAILED,
-#                        reason="PyTorch Lightning is not installed"),
-#     pytest.mark.skipif(CHEMBERTA_IMPORT_FAILED,
-#                        reason="ChemBERTa is not installed")
-# ]
+pytestmark = [
+    pytest.mark.skipif(not gpu_available,
+                       reason="No GPU available for testing"),
+    pytest.mark.skipif(torch.cuda.device_count() < 2,
+                       reason="FSDP testing requires at least 2 GPUs"),
+    pytest.mark.skipif(PYTORCH_LIGHTNING_IMPORT_FAILED,
+                       reason="PyTorch Lightning is not installed")
+]
 
 
 @pytest.fixture(scope="function")
@@ -47,7 +40,7 @@ def smiles_data(tmp_path_factory):
     """
     Fixture to create a small SMILES dataset for ChemBERTa testing.
     """
-    # Small set of SMILES strings for testing - increased for FSDP
+    # Small set of SMILES strings for testing
     smiles = [
         'CCO',  
         'CCC',  
@@ -83,36 +76,13 @@ def smiles_data(tmp_path_factory):
     )
     
     return {
-        "dataset": dataset,
-        "n_tasks": 1,
-        "smiles": smiles,
-        "labels": labels
+        "dataset": dataset
     }
 
 
-@pytest.fixture(scope="function") 
-def chemberta_tokenizer():
-    """
-    Fixture to load ChemBERTa tokenizer.
-    """
-    # Use a smaller, faster ChemBERTa model for testing
-    model_name = "seyonec/ChemBERTa-zinc-base-v1"
-    tokenizer = ''#AutoTokenizer.from_pretrained(model_name)
-    return tokenizer
-
-
 @pytest.mark.torch
-def test_chemberta_masked_lm_workflow(smiles_data, chemberta_tokenizer):
-    """
-    Tests the masked language modeling workflow with ChemBERTa using FSDP.
-    This validates the Lightning wrappers work with HuggingFace transformer models
-    for self-supervised pretraining tasks with FSDP distributed training.
-    """
+def test_chemberta_masked_lm_workflow(smiles_data):
     dataset = smiles_data["dataset"]
-    # model_name = "seyonec/ChemBERTa-zinc-base-v1"
-    
-    # Load ChemBERTa model for masked language modeling
-  
     tokenizer_path = "seyonec/PubChem10M_SMILES_BPE_60k"
 
     dc_hf_model =  Chemberta(task='mlm', tokenizer_path=tokenizer_path, device='cpu', batch_size=2, learning_rate=0.0001)
@@ -120,20 +90,19 @@ def test_chemberta_masked_lm_workflow(smiles_data, chemberta_tokenizer):
     # Setup DeepChemLightningTrainer for MLM pretraining with FSDP
     trainer = DeepChemLightningTrainer(
         model=dc_hf_model,
-        batch_size=2,  # Increased batch size for FSDP
+        batch_size=2,
         max_epochs=1,
         accelerator="gpu",
         devices=-1,  # Use all available GPUs
-        strategy="fsdp",  # Enable FSDP strategy
+        strategy="fsdp",
         logger=False,
         enable_checkpointing=False,
         enable_progress_bar=False,
         fast_dev_run=True,
-        # precision="16-mixed",  # Mixed precision for efficiency
     )
     
     # Test MLM training
-    trainer.fit(train_dataset=dataset, num_workers=4)
+    trainer.fit(train_dataset=dataset)
     
     trainer.save_checkpoint("chemberta_mlm_checkpoint.ckpt")
 
@@ -148,7 +117,7 @@ def test_chemberta_masked_lm_workflow(smiles_data, chemberta_tokenizer):
         devices=1,
     )
 
-    # Test MLM prediction (masked token prediction) using the reloaded trainer
+    # Test MLM prediction using the reloaded trainer
     prediction_batches = reloaded_trainer.predict(dataset=dataset, num_workers=0)
     
     # Verify prediction output
@@ -158,51 +127,28 @@ def test_chemberta_masked_lm_workflow(smiles_data, chemberta_tokenizer):
     # For MLM, predictions should be token logits
     if prediction_batches and prediction_batches[0] is not None:
         predictions = prediction_batches[0]
-        assert isinstance(predictions, (torch.Tensor, np.ndarray))
+        assert isinstance(predictions, np.ndarray)
 
 
 @pytest.mark.torch
-def test_chemberta_regression_workflow(smiles_data, chemberta_tokenizer):
-    """
-    Tests the regression workflow with ChemBERTa for molecular property prediction using FSDP.
-    This validates the Lightning wrappers work with HuggingFace models for downstream tasks
-    with FSDP distributed training.
-    """
+def test_chemberta_regression_workflow(smiles_data):
     dataset = smiles_data["dataset"]
-    model_name = "seyonec/ChemBERTa-zinc-base-v1"
     
-    # Load ChemBERTa model for sequence classification (configured for regression)
-    # hf_model = AutoModelForSequenceClassification.from_pretrained(
-    #     model_name,
-    #     num_labels=1,  # regression with single output
-    #     problem_type='regression'
-    # )
-    
-    # # Wrap in DeepChem HuggingFaceModel
-    # dc_hf_model = HuggingFaceModel(
-    #     model=hf_model,
-    #     tokenizer=chemberta_tokenizer,
-    #     task='regression',
-    #     batch_size=8,  # Increased batch size for FSDP
-    #     learning_rate=0.0001,
-    #     device='cpu'  # Device will be managed by Lightning/FSDP
-    # )
     tokenizer_path = "seyonec/PubChem10M_SMILES_BPE_60k"
 
     dc_hf_model =  Chemberta(task='regression', tokenizer_path=tokenizer_path, device='cpu', batch_size=2, learning_rate=0.0001)
     # Setup DeepChemLightningTrainer for regression training with FSDP
     trainer = DeepChemLightningTrainer(
         model=dc_hf_model,
-        batch_size=8,  # Increased batch size for FSDP
+        batch_size=8,
         max_epochs=1,
         accelerator="gpu",
-        devices=-1,  # Use all available GPUs
-        strategy="fsdp",  # Enable FSDP strategy
+        devices=-1,
+        strategy="fsdp",
         logger=False,
         enable_checkpointing=False,
         enable_progress_bar=False,
         fast_dev_run=True,
-        precision="16-mixed",  # Mixed precision for efficiency
     )
     
     # Test regression training
@@ -221,27 +167,24 @@ def test_chemberta_regression_workflow(smiles_data, chemberta_tokenizer):
     )
 
     # Test regression prediction using the reloaded trainer
-    prediction_batches = reloaded_trainer.predict(dataset=dataset, num_workers=0)
+    prediction_batches = reloaded_trainer.predict(dataset=dataset)
     
     # Verify prediction output
     assert isinstance(prediction_batches, list)
     assert len(prediction_batches) > 0
     
-    # Handle potential None values in prediction batches for FSDP
+
     valid_predictions = [p for p in prediction_batches if p is not None]
     if valid_predictions:
         predictions = np.concatenate(valid_predictions)
         assert isinstance(predictions, np.ndarray)
         
         # For regression, predictions should match the number of samples and tasks
-        assert predictions.shape[1] == 1  # single regression task
+        assert predictions.shape == (16,1)  # single regression task
 
 
 @pytest.mark.torch 
-def test_chemberta_classification_workflow(smiles_data, chemberta_tokenizer, tmp_path):
-    """
-    Tests the classification workflow with ChemBERTa for molecular classification using FSDP.
-    """
+def test_chemberta_classification_workflow(smiles_data, tmp_path):
     dataset = smiles_data["dataset"]
     
     # Convert regression labels to binary classification
@@ -264,16 +207,16 @@ def test_chemberta_classification_workflow(smiles_data, chemberta_tokenizer, tmp
     # Setup DeepChemLightningTrainer for classification training with FSDP
     trainer = DeepChemLightningTrainer(
         model=dc_hf_model,
-        batch_size=2,  # Match model batch size
+        batch_size=2,
         max_epochs=1,
         accelerator="gpu", 
-        devices=-1,  # Use all available GPUs
-        strategy="fsdp",  # Enable FSDP strategy
+        devices=-1,  
+        strategy="fsdp",
         logger=False,
         enable_checkpointing=False,
         enable_progress_bar=False,
         fast_dev_run=True,
-        # precision="16-mixed",  # Mixed precision for efficiency
+        precision="16-mixed", 
     )
     
     # Test classification training
@@ -293,13 +236,12 @@ def test_chemberta_classification_workflow(smiles_data, chemberta_tokenizer, tmp
     )
 
     # Test classification prediction using the reloaded trainer
-    prediction_batches = reloaded_trainer.predict(dataset=classification_dataset, num_workers=0)
+    prediction_batches = reloaded_trainer.predict(dataset=classification_dataset)
     
     # Verify prediction output
     assert isinstance(prediction_batches, list)
     assert len(prediction_batches) > 0
     
-    # Handle potential None values in prediction batches for FSDP
     valid_predictions = [p for p in prediction_batches if p is not None]
     if valid_predictions:
         predictions = np.concatenate(valid_predictions)
@@ -310,37 +252,33 @@ def test_chemberta_classification_workflow(smiles_data, chemberta_tokenizer, tmp
 
 
 @pytest.mark.torch
-def test_chemberta_checkpointing_and_loading(smiles_data, chemberta_tokenizer, tmp_path="temp"):
-    """
-    Tests that a ChemBERTa model can be saved via a checkpoint and reloaded correctly with FSDP.
-    It verifies that the model state is identical before saving and after loading in FSDP scenarios.
-    """
+def test_chemberta_checkpointing_and_loading(smiles_data):
     dataset = smiles_data["dataset"]
     tokenizer_path = "seyonec/PubChem10M_SMILES_BPE_60k"
     
     # Load ChemBERTa model for regression using Chemberta
     dc_hf_model = Chemberta(task='regression', tokenizer_path=tokenizer_path, device='cpu', batch_size=2, learning_rate=0.0001)
     
-    # Setup trainer with temporary directory for checkpoints
+    # Setup DeepChemLightningTrainer
     trainer = DeepChemLightningTrainer(
         model=dc_hf_model,
-        batch_size=2,  # Match model batch size
-        max_epochs=1,
+        batch_size=2,
+        max_epochs=3,
         accelerator="gpu",
         devices=-1,
-        default_root_dir=str(tmp_path),
         enable_progress_bar=False,
         logger=False,
-        # precision="16-mixed",  # Mixed precision for efficiency
+        enable_checkpointing=False,
+        
     )
     
-    # Store model state *before* training for comparison
+    # Store model state before training for comparison
     state_before_training = deepcopy(trainer.lightning_model.pt_model.state_dict())
     
     # Train the model for one epoch, which will create a checkpoint
-    trainer.fit(train_dataset=dataset, num_workers=4)
+    trainer.fit(train_dataset=dataset)
     
-    # Get model state *after* training
+    # Get model state after training
     state_after_training = trainer.lightning_model.pt_model.state_dict()
     
     # --- Correctness Check 1: Before Saving ---
@@ -351,25 +289,22 @@ def test_chemberta_checkpointing_and_loading(smiles_data, chemberta_tokenizer, t
                               state_after_training[key].detach().cpu(), rtol=1e-4, atol=1e-6):
             weight_changed = True
             break
-    assert weight_changed, "Model weights did not change after one epoch of training."
+    assert weight_changed, "Model weights did not change (no training occurred)."
     
-    # Save checkpoint using DeepChemLightningTrainer
-    checkpoint_path = str(Path(tmp_path) / "model_checkpoint.ckpt")
-    trainer.save_checkpoint(checkpoint_path)
+    trainer.save_checkpoint("model_checkpoint.ckpt")
     
     # Create a new model instance for loading
     dc_hf_model_new = Chemberta(task='regression', tokenizer_path=tokenizer_path, device='cpu', batch_size=2, learning_rate=0.0001)
     
     # Load the model from the checkpoint using DeepChemLightningTrainer
     reloaded_trainer = DeepChemLightningTrainer.load_checkpoint(
-        checkpoint_path, 
+        "model_checkpoint.ckpt", 
         model=dc_hf_model_new,
         batch_size=2,
         accelerator="gpu",
-        devices=-1,  # Use single device for consistency
+        devices=-1,
         logger=False,
-        enable_progress_bar=False,
-        # precision="16-mixed",
+        enable_progress_bar=False
     )
     state_reloaded = reloaded_trainer.lightning_model.pt_model.state_dict()
     
@@ -391,7 +326,6 @@ def test_chemberta_checkpointing_and_loading(smiles_data, chemberta_tokenizer, t
     original_preds_batches = trainer.predict(dataset=dataset, num_workers=0)
     reloaded_preds_batches = reloaded_trainer.predict(dataset=dataset, num_workers=0)
     
-    # Handle potential None values in prediction batches for FSDP
     if original_preds_batches is not None and reloaded_preds_batches is not None:
         original_valid = [p for p in original_preds_batches if p is not None]
         reloaded_valid = [p for p in reloaded_preds_batches if p is not None]
@@ -409,22 +343,13 @@ def test_chemberta_checkpointing_and_loading(smiles_data, chemberta_tokenizer, t
 
 
 @pytest.mark.torch
-def test_chemberta_overfit_with_lightning_trainer(smiles_data, chemberta_tokenizer):
-    """
-    Tests if the ChemBERTa model can overfit to a small dataset using Lightning trainer with FSDP.
-    This validates that the Lightning training loop works correctly and the model
-    can learn from the data by achieving good performance on the training set.
-    Also tests the multi-GPU prediction capability with checkpoint saving and loading.
-    """
-    import torch
-    import deepchem as dc
+def test_chemberta_overfit_with_lightning_trainer(smiles_data):
     L.seed_everything(42)
     
     dataset = smiles_data["dataset"]
     tokenizer_path = "seyonec/PubChem10M_SMILES_BPE_60k"
     mae_metric = dc.metrics.Metric(dc.metrics.mean_absolute_error)
    
-    classification_dataset = dataset
     
     # Create ChemBERTa model for classification
     dc_hf_model = Chemberta(
@@ -436,26 +361,27 @@ def test_chemberta_overfit_with_lightning_trainer(smiles_data, chemberta_tokeniz
     )
     
 
-    # Create Lightning trainer with optimized settings for multi-GPU HuggingFace models with FSDP
+    # Create Lightning trainer
     lightning_trainer = DeepChemLightningTrainer(
         model=dc_hf_model,
-        batch_size=1,  # Match model batch size to ensure all samples processed
+        batch_size=1,
         max_epochs=70,  # More epochs for overfitting
         accelerator="gpu",
-        strategy="fsdp",
-        devices=-1,  # Use all available GPUs
+        strategy="ddp",
+        devices=-1,
         logger=False,
         enable_progress_bar=False,
+        enable_checkpointing=False,
         precision="16-mixed",
     )
     
 
     eval_before = dc_hf_model.evaluate(
-        dataset=classification_dataset,
-        metrics=[dc.metrics.Metric(dc.metrics.mean_absolute_error)]
+        dataset=dataset,
+        metrics=[mae_metric]
     )
 
-    lightning_trainer.fit(classification_dataset, num_workers=0)
+    lightning_trainer.fit(dataset)
     
     # Save checkpoint after training
     lightning_trainer.save_checkpoint("chemberta_overfit_best.ckpt")
@@ -484,5 +410,5 @@ def test_chemberta_overfit_with_lightning_trainer(smiles_data, chemberta_tokeniz
         dataset=dataset,
         metrics=[mae_metric]
     )
-    print(eval_before, eval_score)
+    # If the model overfits the mae score should be significantly lower than before training
     assert eval_before[mae_metric.name] > eval_score[mae_metric.name]*2, "Model did not overfit as expected"
