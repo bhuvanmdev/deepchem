@@ -5,8 +5,10 @@ from deepchem.models.torch_models import TorchModel
 from deepchem.trans import Transformer, undo_transforms
 from deepchem.utils.evaluate import _process_metric_input, Score, Metrics
 from deepchem.metrics import Metric
+from deepchem.utils.evaluate import Evaluator
 from deepchem.utils.typing import OneOrMany
 from typing import Any, Dict, List, Optional, Union, Tuple
+from deepchem.models import Model
 import logging
 import numpy as np
 import lightning as L
@@ -16,7 +18,7 @@ rdBase.DisableLog('rdApp.warning')
 logger = logging.getLogger(__name__)
 
 
-class LightningTorchModel:
+class LightningTorchModel(Model):
     """A wrapper class that handles the training and inference of DeepChem models using Lightning.
 
     This class provides a high-level interface for training and running inference
@@ -33,6 +35,8 @@ class LightningTorchModel:
     **trainer_kwargs
         Additional keyword arguments passed to the Lightning Trainer.
         For all available options, see: https://lightning.ai/docs/pytorch/stable/common/trainer.html#init
+
+    
 
     Examples
     --------
@@ -67,7 +71,7 @@ class LightningTorchModel:
 
     def __init__(self,
                  model: TorchModel,
-                 batch_size: int = 32,
+                 batch_size: int = 32, 
                  **trainer_kwargs: Any) -> None:
         self.model: TorchModel = model
         self.batch_size: int = batch_size
@@ -150,88 +154,54 @@ class LightningTorchModel:
                                            return_predictions=True,
                                            ckpt_path=ckpt_path)
 
+        predictions = np.concatenate([p for p in predictions]) if predictions else []
         return predictions
 
-    def evaluate(self,
-                 dataset: Dataset,
-                 metrics: Metrics,
-                 transformers: List[Transformer] = [],
-                 per_task_metrics: bool = False,
-                 use_sample_weights: bool = False,
-                 n_classes: int = 2) -> Union[Score, Tuple[Score, Score]]:
-        """
-        Evaluate model performance on a dataset using Lightning for multi-GPU support.
+    # def evaluate(self,
+    #              dataset: Dataset,
+    #              metrics: Metrics,
+    #              transformers: List[Transformer] = [],
+    #              per_task_metrics: bool = False,
+    #              use_sample_weights: bool = False,
+    #              n_classes: int = 2) -> Union[Score, Tuple[Score, Score]]:
+    #     """
+    #     Evaluate model performance on a dataset using Lightning for multi-GPU support.
 
-        Changes compared to the original `evaluate` method:
-        - Uses `LightningTorchModel's` predict method to get predictions.
-        - Performs additional concatenation of predictions to ensure correct shape.
+    #     Changes compared to the original `evaluate` method:
+    #     - Uses `LightningTorchModel's` predict method to get predictions.
+    #     - Performs additional concatenation of predictions to ensure correct shape.
 
-        This method refers to the `evaluate` method in the `Evaluator` class
+    #     This method refers to the `evaluate` method in the `Evaluator` class
 
-        Parameters
-        ----------
-        dataset: Dataset
-            DeepChem dataset to evaluate on.
-        metrics: Metrics
-            The set of metrics to compute. Can be a single metric, list of metrics,
-            or metric functions.
-        transformers: List[Transformer], default []
-            List of transformers that were applied to the dataset.
-        per_task_metrics: bool, default False
-            If true, return computed metric for each task on multitask dataset.
-        use_sample_weights: bool, default False
-            If set, use per-sample weights.
-        n_classes: int, default 2
-            Number of unique classes for classification metrics.
+    #     Parameters
+    #     ----------
+    #     dataset: Dataset
+    #         DeepChem dataset to evaluate on.
+    #     metrics: Metrics
+    #         The set of metrics to compute. Can be a single metric, list of metrics,
+    #         or metric functions.
+    #     transformers: List[Transformer], default []
+    #         List of transformers that were applied to the dataset.
+    #     per_task_metrics: bool, default False
+    #         If true, return computed metric for each task on multitask dataset.
+    #     use_sample_weights: bool, default False
+    #         If set, use per-sample weights.
+    #     n_classes: int, default 2
+    #         Number of unique classes for classification metrics.
 
-        Returns
-        -------
-        Union[Score, Tuple[Score, Score]]
-            Dictionary mapping metric names to scores. If per_task_metrics is True,
-            returns a tuple of (multitask_scores, all_task_scores).
-        """
+    #     Returns
+    #     -------
+    #     Union[Score, Tuple[Score, Score]]
+    #         Dictionary mapping metric names to scores. If per_task_metrics is True,
+    #         returns a tuple of (multitask_scores, all_task_scores).
+    #     """
 
-        # Process input metrics
-        processed_metrics: List[Metric] = _process_metric_input(metrics)
-
-        y: np.ndarray = dataset.y
-        w: np.ndarray = dataset.w
-
-        output_transformers = [t for t in transformers if t.transform_y]
-        y = undo_transforms(y, output_transformers)
-
-        # Get predictions using Lightning's predict
-        y_pred = self.predict(dataset, transformers=output_transformers)
-        if y_pred is None:
-            raise ValueError("Prediction failed - no results returned")
-        y_pred = np.concatenate([p for p in y_pred])
-
-        n_tasks = len(dataset.get_task_names())
-
-        multitask_scores = {}
-        all_task_scores = {}
-
-        # Compute metrics
-        for metric in processed_metrics:
-            results = metric.compute_metric(
-                y,
-                y_pred,
-                w,
-                per_task_metrics=per_task_metrics,
-                n_tasks=n_tasks,
-                n_classes=n_classes,
-                use_sample_weights=use_sample_weights)
-
-            if per_task_metrics:
-                multitask_scores[metric.name], computed_metrics = results
-                all_task_scores[metric.name] = computed_metrics
-            else:
-                multitask_scores[metric.name] = results
-
-        if not per_task_metrics:
-            return multitask_scores
-        else:
-            return multitask_scores, all_task_scores
+    #     evaluator = Evaluator(self, dataset, transformers)
+    #     return evaluator.compute_model_performance(
+    #         metrics,
+    #         per_task_metrics=per_task_metrics,
+    #         use_sample_weights=use_sample_weights,
+    #         n_classes=n_classes)
 
     def save_checkpoint(self, filepath: str):
         """Save model checkpoint using Lightning's native checkpointing.
