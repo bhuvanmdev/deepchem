@@ -18,7 +18,7 @@ rdBase.DisableLog('rdApp.warning')
 logger = logging.getLogger(__name__)
 
 
-class LightningTorchModel(Model):
+class LightningTorchModel:
     """A wrapper class that handles the training and inference of DeepChem models using Lightning.
 
     This class provides a high-level interface for training and running inference
