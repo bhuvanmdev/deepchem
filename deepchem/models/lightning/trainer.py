@@ -11,14 +11,16 @@ from typing import Any, Dict, List, Optional, Union, Tuple
 from deepchem.models import Model
 import logging
 import numpy as np
+import os
 import lightning as L
+from lightning.pytorch.callbacks import ModelCheckpoint
 from rdkit import rdBase
 
 rdBase.DisableLog('rdApp.warning')
 logger = logging.getLogger(__name__)
 
 
-class LightningTorchModel:
+class LightningTorchModel(Model):
     """A wrapper class that handles the training and inference of DeepChem models using Lightning.
 
     This class provides a high-level interface for training and running inference
@@ -32,6 +34,10 @@ class LightningTorchModel:
         Initialized DeepChem model to be trained or used for inference.
     batch_size: int, default 32
         Batch size for training and prediction data loaders.
+    model_dir: str, optional (default None)
+        Path to directory where model and checkpoints will be stored. If not specified,
+        model will be stored in a temporary directory. This is compatible with 
+        DeepChem's model directory structure.
     **trainer_kwargs
         Additional keyword arguments passed to the Lightning Trainer.
         For all available options, see: https://lightning.ai/docs/pytorch/stable/common/trainer.html#init
@@ -62,7 +68,10 @@ class LightningTorchModel:
     ...     log_every_n_steps=1,
     ...     fast_dev_run=True
     ... )
-    >>> trainer.fit(valid_dataset)
+    >>> # Train with custom checkpoint settings
+    >>> trainer.fit(valid_dataset, 
+    ...              max_checkpoints_to_keep=3,
+    ...              checkpoint_interval=1000)
     >>> predictions = trainer.predict(valid_dataset)
     >>> trainer.save_checkpoint("model.ckpt")
     >>> # To reload:
@@ -71,17 +80,28 @@ class LightningTorchModel:
 
     def __init__(self,
                  model: TorchModel,
-                 batch_size: int = 32, 
+                 batch_size: int = 32,
+                 model_dir: Optional[str] = None,
                  **trainer_kwargs: Any) -> None:
+        # Initialize the base Model class with model_dir to ensure compatibility
+        super(LightningTorchModel, self).__init__(model=model.model, model_dir=model_dir)
+        
         self.model: TorchModel = model
         self.batch_size: int = batch_size
         self.trainer_kwargs: Dict[str, Any] = trainer_kwargs
+        
+        # Set default_root_dir for Lightning to use our model_dir if not specified
+        if 'default_root_dir' not in self.trainer_kwargs:
+            self.trainer_kwargs['default_root_dir'] = self.model_dir
+            
         self.trainer: L.Trainer = L.Trainer(**self.trainer_kwargs)
         # Create the Lightning module
         self.lightning_model: DCLightningModule = DCLightningModule(model)
 
     def fit(self,
             train_dataset: Dataset,
+            max_checkpoints_to_keep: int = 5,
+            checkpoint_interval: int = 20,
             num_workers: int = 4,
             ckpt_path: Optional[str] = None):
         """Train the model on the provided dataset.
@@ -90,11 +110,72 @@ class LightningTorchModel:
         ----------
         train_dataset: dc.data.Dataset
             DeepChem dataset for training.
+        max_checkpoints_to_keep: int, default 5
+            The maximum number of checkpoints to keep. Older checkpoints are discarded.
+            - If 1: saves only the last checkpoint (no monitor needed)
+            - If <= 0: saves all checkpoints 
+            - If > 1: monitors 'step' metric to keep the most recent checkpoints
+        checkpoint_interval: int, default 1000
+            The frequency at which to write checkpoints, measured in training steps.
+            Set this to 0 to disable automatic checkpointing.
+            This maps to Lightning's ModelCheckpoint every_n_train_steps parameter.
         num_workers: int, default 4
             Number of workers for DataLoader.
         ckpt_path: Optional[str], default None
             Path to a checkpoint file to resume training from. If None, starts fresh.
         """
+        
+        # Set up checkpointing if checkpoint_interval > 0
+        if checkpoint_interval > 0 and self.trainer_kwargs.get('enable_checkpointing', True):
+            # Create checkpoint directory within model_dir for DeepChem compatibility
+            # This follows the pattern: <model_dir>/checkpoints/
+            # Individual checkpoints will be named like: epoch=N-step=M.ckpt
+            checkpoint_dir = os.path.join(self.model_dir, "checkpoints")
+            
+            # # Configure checkpoint callback based on max_checkpoints_to_keep
+            # if max_checkpoints_to_keep == 1:
+            #     # For single checkpoint, we don't need a monitor
+            #     checkpoint_callback = ModelCheckpoint(
+            #         dirpath=checkpoint_dir,
+            #         filename='{epoch}-{step}',  # Compatible with DeepChem conventions
+            #         save_top_k=1,
+            #         every_n_train_steps=checkpoint_interval,
+            #         save_last=True,  # Always save the last checkpoint as 'last.ckpt'
+            #         verbose=True
+            #     )
+            # elif max_checkpoints_to_keep <= 0:
+            #     # For max_checkpoints_to_keep <= 0, save all checkpoints
+            #     checkpoint_callback = ModelCheckpoint(
+            #         dirpath=checkpoint_dir,
+            #         filename='{epoch}-{step}',  # Compatible with DeepChem conventions
+            #         save_top_k=-1,  # Save all checkpoints
+            #         every_n_train_steps=checkpoint_interval,
+            #         save_last=True,  # Always save the last checkpoint as 'last.ckpt'
+            #         verbose=True
+            #     )
+            # else:
+            # For multiple checkpoints, monitor 'step' to keep the most recent ones
+            # This mimics TorchModel behavior where newer checkpoints are preferred
+            # Lightning requires a monitor when save_top_k > 1 to rank checkpoints
+            checkpoint_callback = ModelCheckpoint(
+                dirpath=checkpoint_dir,
+                filename='{epoch}-{step}',  # Compatible with DeepChem conventions
+                monitor='step',  # Monitor step count to keep most recent checkpoints
+                mode='max',  # Higher step number means more recent
+                save_top_k=max_checkpoints_to_keep,
+                every_n_train_steps=checkpoint_interval,
+                save_last=True,  # Always save the last checkpoint as 'last.ckpt'
+                verbose=True
+            )
+            
+            # Check if there's already a ModelCheckpoint callback configured
+            existing_callbacks = getattr(self.trainer, 'callbacks', []) or []
+            has_checkpoint_callback = any(isinstance(cb, ModelCheckpoint) for cb in existing_callbacks)
+            
+            if not has_checkpoint_callback:
+                trainer_kwargs = self.trainer_kwargs.copy()
+                trainer_kwargs['callbacks'] = existing_callbacks + [checkpoint_callback]
+                self.trainer = L.Trainer(**trainer_kwargs)
 
         # Create data module
         data_module = DCLightningDatasetModule(dataset=train_dataset,
@@ -157,52 +238,6 @@ class LightningTorchModel:
         predictions = np.concatenate([p for p in predictions]) if predictions else []
         return predictions
 
-    # def evaluate(self,
-    #              dataset: Dataset,
-    #              metrics: Metrics,
-    #              transformers: List[Transformer] = [],
-    #              per_task_metrics: bool = False,
-    #              use_sample_weights: bool = False,
-    #              n_classes: int = 2) -> Union[Score, Tuple[Score, Score]]:
-    #     """
-    #     Evaluate model performance on a dataset using Lightning for multi-GPU support.
-
-    #     Changes compared to the original `evaluate` method:
-    #     - Uses `LightningTorchModel's` predict method to get predictions.
-    #     - Performs additional concatenation of predictions to ensure correct shape.
-
-    #     This method refers to the `evaluate` method in the `Evaluator` class
-
-    #     Parameters
-    #     ----------
-    #     dataset: Dataset
-    #         DeepChem dataset to evaluate on.
-    #     metrics: Metrics
-    #         The set of metrics to compute. Can be a single metric, list of metrics,
-    #         or metric functions.
-    #     transformers: List[Transformer], default []
-    #         List of transformers that were applied to the dataset.
-    #     per_task_metrics: bool, default False
-    #         If true, return computed metric for each task on multitask dataset.
-    #     use_sample_weights: bool, default False
-    #         If set, use per-sample weights.
-    #     n_classes: int, default 2
-    #         Number of unique classes for classification metrics.
-
-    #     Returns
-    #     -------
-    #     Union[Score, Tuple[Score, Score]]
-    #         Dictionary mapping metric names to scores. If per_task_metrics is True,
-    #         returns a tuple of (multitask_scores, all_task_scores).
-    #     """
-
-    #     evaluator = Evaluator(self, dataset, transformers)
-    #     return evaluator.compute_model_performance(
-    #         metrics,
-    #         per_task_metrics=per_task_metrics,
-    #         use_sample_weights=use_sample_weights,
-    #         n_classes=n_classes)
-
     def save_checkpoint(self, filepath: str):
         """Save model checkpoint using Lightning's native checkpointing.
 
@@ -223,6 +258,7 @@ class LightningTorchModel:
     def load_checkpoint(filepath: str,
                         model: TorchModel,
                         batch_size: int = 32,
+                        model_dir: Optional[str] = None,
                         **trainer_kwargs):
         """Create a new trainer instance with the loaded model weights.
 
@@ -248,6 +284,9 @@ class LightningTorchModel:
             DeepChem model instance to load weights into.
         batch_size: int, default 32
             Batch size for the trainer/model.
+        model_dir: str, optional (default None)
+            Path to directory where model and checkpoints will be stored. If not specified,
+            model will be stored in a temporary directory.
         **trainer_kwargs
             Additional trainer arguments.
             For all available options, see: https://lightning.ai/docs/pytorch/stable/common/trainer.html#init
@@ -266,6 +305,7 @@ class LightningTorchModel:
         # Create trainer first
         trainer = LightningTorchModel(model=model,
                                       batch_size=batch_size,
+                                      model_dir=model_dir,
                                       **trainer_kwargs)
 
         # Load the checkpoint

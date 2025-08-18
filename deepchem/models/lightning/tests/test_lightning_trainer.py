@@ -178,7 +178,8 @@ def test_gcn_overfit_with_lightning_trainer():
         devices=-1,
         logger=False,
         enable_progress_bar=False,
-        enable_checkpointing=False,
+        model_dir="modeldir"
+        # enable_checkpointing=False,
     )
 
     # Train the model
