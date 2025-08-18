@@ -100,7 +100,7 @@ class LightningTorchModel(Model):
 
     def fit(self,
             train_dataset: Dataset,
-            max_checkpoints_to_keep: int = 5,
+            max_checkpoints_to_keep: int = 2,
             checkpoint_interval: int = 20,
             num_workers: int = 4,
             ckpt_path: Optional[str] = None):
@@ -115,7 +115,7 @@ class LightningTorchModel(Model):
             - If 1: saves only the last checkpoint (no monitor needed)
             - If <= 0: saves all checkpoints 
             - If > 1: monitors 'step' metric to keep the most recent checkpoints
-        checkpoint_interval: int, default 1000
+        checkpoint_interval: int, default 20
             The frequency at which to write checkpoints, measured in training steps.
             Set this to 0 to disable automatic checkpointing.
             This maps to Lightning's ModelCheckpoint every_n_train_steps parameter.
@@ -132,40 +132,18 @@ class LightningTorchModel(Model):
             # Individual checkpoints will be named like: epoch=N-step=M.ckpt
             checkpoint_dir = os.path.join(self.model_dir, "checkpoints")
             
-            # # Configure checkpoint callback based on max_checkpoints_to_keep
-            # if max_checkpoints_to_keep == 1:
-            #     # For single checkpoint, we don't need a monitor
-            #     checkpoint_callback = ModelCheckpoint(
-            #         dirpath=checkpoint_dir,
-            #         filename='{epoch}-{step}',  # Compatible with DeepChem conventions
-            #         save_top_k=1,
-            #         every_n_train_steps=checkpoint_interval,
-            #         save_last=True,  # Always save the last checkpoint as 'last.ckpt'
-            #         verbose=True
-            #     )
-            # elif max_checkpoints_to_keep <= 0:
-            #     # For max_checkpoints_to_keep <= 0, save all checkpoints
-            #     checkpoint_callback = ModelCheckpoint(
-            #         dirpath=checkpoint_dir,
-            #         filename='{epoch}-{step}',  # Compatible with DeepChem conventions
-            #         save_top_k=-1,  # Save all checkpoints
-            #         every_n_train_steps=checkpoint_interval,
-            #         save_last=True,  # Always save the last checkpoint as 'last.ckpt'
-            #         verbose=True
-            #     )
-            # else:
-            # For multiple checkpoints, monitor 'step' to keep the most recent ones
-            # This mimics TorchModel behavior where newer checkpoints are preferred
-            # Lightning requires a monitor when save_top_k > 1 to rank checkpoints
+            # For limited checkpoints, save the most recent ones
+            # Use train_loss_step since it's now logged at step level
             checkpoint_callback = ModelCheckpoint(
                 dirpath=checkpoint_dir,
-                filename='{epoch}-{step}',  # Compatible with DeepChem conventions
-                monitor='step',  # Monitor step count to keep most recent checkpoints
-                mode='max',  # Higher step number means more recent
+                filename='f{epoch}-{step}',  # Compatible with DeepChem conventions
+                monitor='train_loss',  # Monitor step-level training loss
+                # mode='min',  # Lower loss is better
                 save_top_k=max_checkpoints_to_keep,
                 every_n_train_steps=checkpoint_interval,
-                save_last=True,  # Always save the last checkpoint as 'last.ckpt'
-                verbose=True
+                # save_last=True,  # Always save the last checkpoint as 'last.ckpt'
+                verbose=True,
+                enable_version_counter=False
             )
             
             # Check if there's already a ModelCheckpoint callback configured

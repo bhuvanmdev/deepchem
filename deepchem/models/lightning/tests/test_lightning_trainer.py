@@ -164,20 +164,21 @@ def test_gcn_overfit_with_lightning_trainer():
         mode='classification',
         n_tasks=len(tasks),
         number_atom_features=30,
-        batch_size=10,
+        batch_size=5,
         learning_rate=0.0003,
         device='cpu',
     )
 
     lightning_trainer = LightningTorchModel(
         model=gcn_model,
-        batch_size=10,
+        batch_size=5,
         max_epochs=70,
         accelerator="cuda",
         strategy="fsdp",
         devices=-1,
-        logger=False,
-        enable_progress_bar=False,
+        # logger=False,
+        # enable_progress_bar=False,
+        enable_checkpointing=True,
         model_dir="modeldir"
         # enable_checkpointing=False,
     )

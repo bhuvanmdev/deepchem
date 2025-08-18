@@ -152,6 +152,7 @@ class DCLightningModule(L.LightningModule):
             "train_loss",
             loss,
             on_epoch=True,
+            on_step=True,  # Also log at step level for checkpointing
             sync_dist=True,
             reduce_fx="mean",
             prog_bar=True,
