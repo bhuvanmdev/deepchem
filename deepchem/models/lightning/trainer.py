@@ -110,51 +110,49 @@ class LightningTorchModel(Model):
         ----------
         train_dataset: dc.data.Dataset
             DeepChem dataset for training.
-        max_checkpoints_to_keep: int, default 5
+        max_checkpoints_to_keep: int, default 2
             The maximum number of checkpoints to keep. Older checkpoints are discarded.
-            - If 1: saves only the last checkpoint (no monitor needed)
-            - If <= 0: saves all checkpoints 
-            - If > 1: monitors 'step' metric to keep the most recent checkpoints
+            This maps to Lightning's save_top_k parameter.
         checkpoint_interval: int, default 20
             The frequency at which to write checkpoints, measured in training steps.
             Set this to 0 to disable automatic checkpointing.
-            This maps to Lightning's ModelCheckpoint every_n_train_steps parameter.
         num_workers: int, default 4
             Number of workers for DataLoader.
         ckpt_path: Optional[str], default None
             Path to a checkpoint file to resume training from. If None, starts fresh.
         """
         
-        # Set up checkpointing if checkpoint_interval > 0
-        if checkpoint_interval > 0 and self.trainer_kwargs.get('enable_checkpointing', True):
-            # Create checkpoint directory within model_dir for DeepChem compatibility
-            # This follows the pattern: <model_dir>/checkpoints/
-            # Individual checkpoints will be named like: epoch=N-step=M.ckpt
-            checkpoint_dir = os.path.join(self.model_dir, "checkpoints")
-            
-            # For limited checkpoints, save the most recent ones
-            # Use train_loss_step since it's now logged at step level
+        # Prepare callbacks for the trainer
+        callbacks_list = []
+        
+        # Add checkpoint callback if interval > 0
+        if checkpoint_interval > 0:
             checkpoint_callback = ModelCheckpoint(
-                dirpath=checkpoint_dir,
-                filename='f{epoch}-{step}',  # Compatible with DeepChem conventions
-                monitor='train_loss',  # Monitor step-level training loss
-                # mode='min',  # Lower loss is better
-                save_top_k=max_checkpoints_to_keep,
+                dirpath=os.path.join(self.model_dir, "checkpoints"),
+                filename='{epoch}-{step}',
                 every_n_train_steps=checkpoint_interval,
-                # save_last=True,  # Always save the last checkpoint as 'last.ckpt'
-                verbose=True,
-                enable_version_counter=False
+                save_top_k=max_checkpoints_to_keep,
+                monitor=None,  # No monitoring metric, just save based on steps
+                save_last=True,  # Always keep the last checkpoint
+                auto_insert_metric_name=False,
+                verbose=True
             )
-            
-            # Check if there's already a ModelCheckpoint callback configured
-            existing_callbacks = getattr(self.trainer, 'callbacks', []) or []
-            has_checkpoint_callback = any(isinstance(cb, ModelCheckpoint) for cb in existing_callbacks)
-            
-            if not has_checkpoint_callback:
-                trainer_kwargs = self.trainer_kwargs.copy()
-                trainer_kwargs['callbacks'] = existing_callbacks + [checkpoint_callback]
-                self.trainer = L.Trainer(**trainer_kwargs)
-
+            callbacks_list.append(checkpoint_callback)
+        
+        # Check if trainer already has callbacks from trainer_kwargs
+        if 'callbacks' in self.trainer_kwargs:
+            existing_callbacks = self.trainer_kwargs['callbacks'] or []
+            # Filter out any existing ModelCheckpoint callbacks and add our new one
+            other_callbacks = [cb for cb in existing_callbacks if not isinstance(cb, ModelCheckpoint)]
+            callbacks_list.extend(other_callbacks)
+        
+        # Create a new trainer with the updated callbacks if we have checkpoint callback
+        if checkpoint_interval > 0:
+            # Update trainer_kwargs to include our callbacks
+            updated_kwargs = self.trainer_kwargs.copy()
+            updated_kwargs['callbacks'] = callbacks_list
+            self.trainer = L.Trainer(**updated_kwargs)
+        
         # Create data module
         data_module = DCLightningDatasetModule(dataset=train_dataset,
                                                batch_size=self.batch_size,
