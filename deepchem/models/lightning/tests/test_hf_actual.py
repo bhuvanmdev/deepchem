@@ -121,7 +121,6 @@ def test_chemberta_masked_lm_workflow(smiles_data):
     prediction_batches = reloaded_trainer.predict(dataset=dataset, num_workers=0)
     
     # Verify prediction output
-    assert isinstance(prediction_batches, list)
     assert len(prediction_batches) > 0
     
     # For MLM, predictions should be token logits
@@ -140,7 +139,7 @@ def test_chemberta_regression_workflow(smiles_data):
     # Setup LightningTorchModel for regression training with FSDP
     trainer = LightningTorchModel(
         model=dc_hf_model,
-        batch_size=8,
+        batch_size=2,
         max_epochs=1,
         accelerator="gpu",
         devices=-1,
@@ -167,20 +166,15 @@ def test_chemberta_regression_workflow(smiles_data):
     )
 
     # Test regression prediction using the reloaded trainer
-    prediction_batches = reloaded_trainer.predict(dataset=dataset)
+    prediction = reloaded_trainer.predict(dataset=dataset)
     
-    # Verify prediction output
-    assert isinstance(prediction_batches, list)
-    assert len(prediction_batches) > 0
+    assert len(prediction) > 0
     
-
-    valid_predictions = [p for p in prediction_batches if p is not None]
-    if valid_predictions:
-        predictions = np.concatenate(valid_predictions)
-        assert isinstance(predictions, np.ndarray)
-        
-        # For regression, predictions should match the number of samples and tasks
-        assert predictions.shape == (16,1)  # single regression task
+    predictions = np.concatenate(prediction)
+    assert isinstance(predictions, np.ndarray)
+    
+    # For regression, predictions should match the number of samples and tasks
+    assert predictions.shape == (16,)  # single regression task
 
 
 @pytest.mark.torch 
@@ -236,19 +230,14 @@ def test_chemberta_classification_workflow(smiles_data, tmp_path):
     )
 
     # Test classification prediction using the reloaded trainer
-    prediction_batches = reloaded_trainer.predict(dataset=classification_dataset)
+    prediction = reloaded_trainer.predict(dataset=classification_dataset)
     
-    # Verify prediction output
-    assert isinstance(prediction_batches, list)
-    assert len(prediction_batches) > 0
+    assert len(prediction) > 0
     
-    valid_predictions = [p for p in prediction_batches if p is not None]
-    if valid_predictions:
-        predictions = np.concatenate(valid_predictions)
-        assert isinstance(predictions, np.ndarray)
-        
-        # For binary classification, predictions should be probabilities for 2 classes
-        assert predictions.shape[1] == 2  # binary classification probabilities
+    assert isinstance(prediction, np.ndarray)
+    
+    # For binary classification, predictions should be probabilities for 2 classes
+    assert prediction.shape[1] == 2  # binary classification probabilities
 
 
 @pytest.mark.torch
@@ -323,23 +312,15 @@ def test_chemberta_checkpointing_and_loading(smiles_data):
     
     # --- Correctness Check 3: Functional Equivalence ---
     # Predict with both models and compare results to ensure they are identical
-    original_preds_batches = trainer.predict(dataset=dataset, num_workers=0)
-    reloaded_preds_batches = reloaded_trainer.predict(dataset=dataset, num_workers=0)
+    original_preds = trainer.predict(dataset=dataset, num_workers=0)
+    reloaded_preds = reloaded_trainer.predict(dataset=dataset, num_workers=0)
     
-    if original_preds_batches is not None and reloaded_preds_batches is not None:
-        original_valid = [p for p in original_preds_batches if p is not None]
-        reloaded_valid = [p for p in reloaded_preds_batches if p is not None]
-        
-        if original_valid and reloaded_valid:
-            original_preds = np.concatenate(original_valid)
-            reloaded_preds = np.concatenate(reloaded_valid)
-            
-            np.testing.assert_allclose(
-                original_preds,
-                reloaded_preds,
-                err_msg="Predictions from original and reloaded models do not match.",
-                rtol=1e-4, atol=1e-6
-            )
+    np.testing.assert_allclose(
+        original_preds,
+        reloaded_preds,
+        err_msg="Predictions from original and reloaded models do not match.",
+        rtol=1e-4, atol=1e-6
+    )
 
 
 @pytest.mark.torch

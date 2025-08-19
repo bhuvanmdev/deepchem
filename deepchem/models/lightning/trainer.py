@@ -241,8 +241,16 @@ class LightningTorchModel(Model):
                                            return_predictions=True,
                                            ckpt_path=ckpt_path)
 
-        predictions = np.concatenate([p for p in predictions
-                                     ]) if predictions else []
+        
+        if predictions:
+            try:
+                predictions = np.concatenate([p for p in predictions])
+            except ValueError:
+                # If concatenation fails (e.g., due to different shapes in MLM tasks),
+                # return the predictions as a list of batches
+                pass
+        else:
+            predictions = []
         return predictions
 
     def save_checkpoint(self, filepath: str):
