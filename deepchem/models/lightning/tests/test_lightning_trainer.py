@@ -176,15 +176,16 @@ def test_gcn_overfit_with_lightning_trainer():
         accelerator="cuda",
         strategy="fsdp",
         devices=-1,
-        # logger=False,
-        # enable_progress_bar=False,
         enable_checkpointing=True,
-        model_dir="modeldir"
-        # enable_checkpointing=False,
+        model_dir="modeldir",
     )
 
     # Train the model
-    lightning_trainer.fit(dataset)
+    lightning_trainer.fit(dataset, max_checkpoints_to_keep=3, checkpoint_interval=20)
+
+    # evaluate the checkpoints availablity 3 + 1 represents the 3 checkpoints plus the final model
+    checkpoints = os.listdir(os.path.join("modeldir","checkpoints"))
+    assert len(checkpoints) == 3 + 1, "No checkpoints were created during training."
 
     # After training, create a new LightningTorchModel instance for prediction and load the best checkpoint
     # Find the latest checkpoint
@@ -208,11 +209,11 @@ def test_gcn_overfit_with_lightning_trainer():
         batch_size=10,
         accelerator="cuda",
         logger=False,
-        enable_progress_bar=False,
-        model_dir=".")
+        enable_progress_bar=False)
 
     scores_multi = lightning_trainer_pred.evaluate(dataset, [metric],
                                                    transformers)
-    # os.remove("best_model.ckpt")
+    if os.path.exists("best_model.ckpt"):
+        os.remove("best_model.ckpt")
     assert scores_multi[
         "mean-roc_auc_score"] > 0.85, "Model did not learn anything during training."

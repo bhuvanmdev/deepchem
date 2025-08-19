@@ -2,12 +2,9 @@ from deepchem.data import Dataset
 from deepchem.models.lightning.dc_lightning_dataset_module import DCLightningDatasetModule
 from deepchem.models.lightning.dc_lightning_module import DCLightningModule
 from deepchem.models.torch_models import TorchModel
-from deepchem.trans import Transformer, undo_transforms
-from deepchem.utils.evaluate import _process_metric_input, Score, Metrics
-from deepchem.metrics import Metric
-from deepchem.utils.evaluate import Evaluator
+from deepchem.trans import Transformer
 from deepchem.utils.typing import OneOrMany
-from typing import Any, Dict, List, Optional, Union, Tuple
+from typing import Any, Dict, List, Optional
 from deepchem.models import Model
 import logging
 import numpy as np
@@ -36,12 +33,29 @@ class LightningTorchModel(Model):
         Initialized DeepChem model to be trained or used for inference.
     batch_size: int, default 32
         Batch size for training and prediction data loaders.
-    model_dir: str, optional (default None)
+    model_dir: str, (default "default_model_dir")
         Path to directory where model and checkpoints will be stored. If not specified,
-        model will be stored in a temporary directory. This is compatible with 
-        DeepChem's model directory structure.
+        model will be stored in a "default_model_dir" directory. This is compatible with 
+        DeepChem's model directory structure. If given as None, a temporary directory will be used.
     **trainer_kwargs
-        Additional keyword arguments passed to the Lightning Trainer.
+        Additional keyword arguments passed to the Lightning Trainer. Common options include:
+        
+            - max_epochs: int, default None
+                Maximum number of training epochs.
+            - accelerator: str, default "auto"
+                Hardware accelerator to use ("cpu", "gpu", "tpu", "auto").
+            - devices: int or str or list, default "auto"
+                Number of devices/GPUs to use.
+            - strategy: str, default "auto"
+                Distributed training strategy ("ddp", "fsdp", "auto").
+            - precision: str or int, default "32-true"
+                Numerical precision ("16-mixed", "bf16-mixed", "32-true").
+            - log_every_n_steps: int, default 50
+                How often to log within training steps.
+            - enable_checkpointing: bool, default True
+                Whether to enable automatic checkpointing.
+            - fast_dev_run: bool or int, default False
+                Run a fast development run with limited batches for debugging.
         For all available options, see: https://lightning.ai/docs/pytorch/stable/common/trainer.html#init
 
     
@@ -83,27 +97,37 @@ class LightningTorchModel(Model):
     def __init__(self,
                  model: TorchModel,
                  batch_size: int = 32,
-                 model_dir: Optional[str] = None,
+                 model_dir: Optional[str] = "default_model_dir",
                  **trainer_kwargs: Any) -> None:
-        # Initialize the base Model class with model_dir to ensure compatibility
-        super(LightningTorchModel, self).__init__(model=model.model, model_dir=model_dir)
         
         self.model: TorchModel = model
         self.batch_size: int = batch_size
         self.trainer_kwargs: Dict[str, Any] = trainer_kwargs
         
+        assert model.batch_size == batch_size, \
+            "Model's batch size must match the LightningTorchModel's batch size."
+        
+        # checkpointing is enabled by default
+        if 'enable_checkpointing' not in self.trainer_kwargs:
+            self.trainer_kwargs['enable_checkpointing'] = True
+        else:
+            if not self.trainer_kwargs['enable_checkpointing']:
+                model_dir = None  # Disable checkpointing if explicitly set to False
+        
         # Set default_root_dir for Lightning to use our model_dir if not specified
         if 'default_root_dir' not in self.trainer_kwargs:
-            self.trainer_kwargs['default_root_dir'] = self.model_dir
-            
-        self.trainer: L.Trainer = L.Trainer(**self.trainer_kwargs)
+            self.trainer_kwargs['default_root_dir'] = model_dir
+
         # Create the Lightning module
         self.lightning_model: DCLightningModule = DCLightningModule(model)
+        
+        # Initialize the base Model class with model_dir to ensure compatibility
+        super(LightningTorchModel, self).__init__(model=model, model_dir=model_dir)
 
     def fit(self,
             train_dataset: Dataset,
-            max_checkpoints_to_keep: int = 2,
-            checkpoint_interval: int = 20,
+            max_checkpoints_to_keep: int = 5,
+            checkpoint_interval: int = 1000,
             num_workers: int = 4,
             ckpt_path: Optional[str] = None):
         """Train the model on the provided dataset.
@@ -112,11 +136,9 @@ class LightningTorchModel(Model):
         ----------
         train_dataset: dc.data.Dataset
             DeepChem dataset for training.
-        max_checkpoints_to_keep: int, default 2
-            The maximum number of checkpoints to keep. Lightning doesn't provide
-            automatic rotation for step-based checkpoints, so we implement this
-            using a custom callback approach.
-        checkpoint_interval: int, default 20
+        max_checkpoints_to_keep: int, default 5
+            The maximum number of checkpoints to keep.
+        checkpoint_interval: int, default 1000
             The frequency at which to write checkpoints, measured in training steps.
             Set this to 0 to disable automatic checkpointing.
         num_workers: int, default 4
@@ -130,7 +152,7 @@ class LightningTorchModel(Model):
         
         # Add checkpoint callback if interval > 0
         if checkpoint_interval > 0:
-            # Use Lightning's built-in checkpoint rotation by monitoring "step"
+            # Use Lightning's built-in checkpoint rotation by monitoring "global_step"
             checkpoint_callback = ModelCheckpoint(
                 dirpath=os.path.join(self.model_dir, "checkpoints"),
                 filename='epoch={epoch}-step={step}',
@@ -157,6 +179,8 @@ class LightningTorchModel(Model):
             updated_kwargs = self.trainer_kwargs.copy()
             updated_kwargs['callbacks'] = callbacks_list
             self.trainer = L.Trainer(**updated_kwargs)
+        else:
+            self.trainer: L.Trainer = L.Trainer(**self.trainer_kwargs)
         
         # Create data module
         data_module = DCLightningDatasetModule(dataset=train_dataset,
@@ -196,6 +220,7 @@ class LightningTorchModel(Model):
         List
             Predictions from the model.
         """
+        self.trainer: L.Trainer = L.Trainer(**self.trainer_kwargs)
 
         # Create data module
         data_module = DCLightningDatasetModule(dataset=dataset,
@@ -239,7 +264,7 @@ class LightningTorchModel(Model):
     def load_checkpoint(filepath: str,
                         model: TorchModel,
                         batch_size: int = 32,
-                        model_dir: Optional[str] = None,
+                        model_dir: Optional[str] = "default_model_dir",
                         **trainer_kwargs):
         """Create a new trainer instance with the loaded model weights.
 
@@ -251,7 +276,8 @@ class LightningTorchModel(Model):
 
         This is designed to create a new instance instead of reloading on the same
         instance to avoid shape-mismatch errors that can occur when restoring
-        weights on the same instance after fitting the model, using FSDP.
+        weights on the same instance after fitting the model, using FSDP training
+        strategy.
 
         Note:
         This is a static method, meaning it should be called on the class directly,
@@ -267,9 +293,26 @@ class LightningTorchModel(Model):
             Batch size for the trainer/model.
         model_dir: str, optional (default None)
             Path to directory where model and checkpoints will be stored. If not specified,
-            model will be stored in a temporary directory.
+            the default directory name lightning 
         **trainer_kwargs
-            Additional trainer arguments.
+            Additional trainer arguments. Common options include:
+
+            - max_epochs: int, default None
+                Maximum number of training epochs.
+            - accelerator: str, default "auto"
+                Hardware accelerator to use ("cpu", "gpu", "tpu", "auto").
+            - devices: int or str or list, default "auto"
+                Number of devices/GPUs to use.
+            - strategy: str, default "auto"
+                Distributed training strategy ("ddp", "fsdp", "auto").
+            - precision: str or int, default "32-true"
+                Numerical precision ("16-mixed", "bf16-mixed", "32-true").
+            - log_every_n_steps: int, default 50
+                How often to log within training steps.
+            - enable_checkpointing: bool, default True
+                Whether to enable automatic checkpointing.
+            - fast_dev_run: bool or int, default False
+                Run a fast development run with limited batches for debugging.
             For all available options, see: https://lightning.ai/docs/pytorch/stable/common/trainer.html#init
 
         Returns
@@ -283,6 +326,7 @@ class LightningTorchModel(Model):
         >>> trainer = LightningTorchModel.load_checkpoint("model.ckpt", model=my_model)
         >>> # NOT: trainer.load_checkpoint("model.ckpt", model=my_model)
         """
+        
         # Create trainer first
         trainer = LightningTorchModel(model=model,
                                       batch_size=batch_size,
