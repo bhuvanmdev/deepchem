@@ -13,7 +13,7 @@ except ImportError:
 
 try:
     import lightning as L
-    from deepchem.models.lightning.trainer import DeepChemLightningTrainer
+    from deepchem.models.lightning.trainer import LightningTorchModel
     PYTORCH_LIGHTNING_IMPORT_FAILED = False
 except ImportError:
     PYTORCH_LIGHTNING_IMPORT_FAILED = True
@@ -87,8 +87,8 @@ def test_chemberta_masked_lm_workflow(smiles_data):
 
     dc_hf_model =  Chemberta(task='mlm', tokenizer_path=tokenizer_path, device='cpu', batch_size=2, learning_rate=0.0001)
     
-    # Setup DeepChemLightningTrainer for MLM pretraining with FSDP
-    trainer = DeepChemLightningTrainer(
+    # Setup LightningTorchModel for MLM pretraining with FSDP
+    trainer = LightningTorchModel(
         model=dc_hf_model,
         batch_size=2,
         max_epochs=1,
@@ -102,7 +102,7 @@ def test_chemberta_masked_lm_workflow(smiles_data):
     )
     
     # Test MLM training
-    trainer.fit(train_dataset=dataset)
+    trainer.fit(train_dataset=dataset, checkpoint_interval=0)
     
     trainer.save_checkpoint("chemberta_mlm_checkpoint.ckpt")
 
@@ -110,7 +110,7 @@ def test_chemberta_masked_lm_workflow(smiles_data):
     new_dc_hf_model = Chemberta(task='mlm', tokenizer_path=tokenizer_path, device='cpu', batch_size=2, learning_rate=0.0001)
     
     # Load the checkpoint into the new model instance
-    reloaded_trainer = DeepChemLightningTrainer.load_checkpoint(
+    reloaded_trainer = LightningTorchModel.load_checkpoint(
         "chemberta_mlm_checkpoint.ckpt", model=new_dc_hf_model,
         batch_size=2,
         accelerator="gpu",
@@ -137,8 +137,8 @@ def test_chemberta_regression_workflow(smiles_data):
     tokenizer_path = "seyonec/PubChem10M_SMILES_BPE_60k"
 
     dc_hf_model =  Chemberta(task='regression', tokenizer_path=tokenizer_path, device='cpu', batch_size=2, learning_rate=0.0001)
-    # Setup DeepChemLightningTrainer for regression training with FSDP
-    trainer = DeepChemLightningTrainer(
+    # Setup LightningTorchModel for regression training with FSDP
+    trainer = LightningTorchModel(
         model=dc_hf_model,
         batch_size=8,
         max_epochs=1,
@@ -152,14 +152,14 @@ def test_chemberta_regression_workflow(smiles_data):
     )
     
     # Test regression training
-    trainer.fit(train_dataset=dataset, num_workers=4)
+    trainer.fit(train_dataset=dataset, num_workers=4,  checkpoint_interval=0)
     trainer.save_checkpoint("chemberta_reg_checkpoint.ckpt")
 
     # Create a new model instance for loading
     new_dc_hf_model = Chemberta(task='regression', tokenizer_path=tokenizer_path, device='cpu', batch_size=2, learning_rate=0.0001)
     
     # Load the checkpoint into the new model instance
-    reloaded_trainer = DeepChemLightningTrainer.load_checkpoint(
+    reloaded_trainer = LightningTorchModel.load_checkpoint(
         "chemberta_reg_checkpoint.ckpt", model=new_dc_hf_model,
         batch_size=2,
         accelerator="gpu",
@@ -204,8 +204,8 @@ def test_chemberta_classification_workflow(smiles_data, tmp_path):
     # Load ChemBERTa model for binary classification using Chemberta
     dc_hf_model = Chemberta(task='classification', tokenizer_path=tokenizer_path, device='cpu', batch_size=2, learning_rate=0.0001)
     
-    # Setup DeepChemLightningTrainer for classification training with FSDP
-    trainer = DeepChemLightningTrainer(
+    # Setup LightningTorchModel for classification training with FSDP
+    trainer = LightningTorchModel(
         model=dc_hf_model,
         batch_size=2,
         max_epochs=1,
@@ -220,7 +220,7 @@ def test_chemberta_classification_workflow(smiles_data, tmp_path):
     )
     
     # Test classification training
-    trainer.fit(train_dataset=classification_dataset, num_workers=4)
+    trainer.fit(train_dataset=classification_dataset, num_workers=4, checkpoint_interval=0)
     
     trainer.save_checkpoint("chemberta_classification_checkpoint.ckpt")
 
@@ -228,7 +228,7 @@ def test_chemberta_classification_workflow(smiles_data, tmp_path):
     new_dc_hf_model = Chemberta(task='classification', tokenizer_path=tokenizer_path, device='cpu', batch_size=2, learning_rate=0.0001)
     
     # Load the checkpoint into the new model instance
-    reloaded_trainer = DeepChemLightningTrainer.load_checkpoint(
+    reloaded_trainer = LightningTorchModel.load_checkpoint(
         "chemberta_classification_checkpoint.ckpt", model=new_dc_hf_model,
         batch_size=2,
         accelerator="gpu",
@@ -259,8 +259,8 @@ def test_chemberta_checkpointing_and_loading(smiles_data):
     # Load ChemBERTa model for regression using Chemberta
     dc_hf_model = Chemberta(task='regression', tokenizer_path=tokenizer_path, device='cpu', batch_size=2, learning_rate=0.0001)
     
-    # Setup DeepChemLightningTrainer
-    trainer = DeepChemLightningTrainer(
+    # Setup LightningTorchModel
+    trainer = LightningTorchModel(
         model=dc_hf_model,
         batch_size=2,
         max_epochs=3,
@@ -276,7 +276,7 @@ def test_chemberta_checkpointing_and_loading(smiles_data):
     state_before_training = deepcopy(trainer.lightning_model.pt_model.state_dict())
     
     # Train the model for one epoch, which will create a checkpoint
-    trainer.fit(train_dataset=dataset)
+    trainer.fit(train_dataset=dataset, checkpoint_interval=0)
     
     # Get model state after training
     state_after_training = trainer.lightning_model.pt_model.state_dict()
@@ -296,8 +296,8 @@ def test_chemberta_checkpointing_and_loading(smiles_data):
     # Create a new model instance for loading
     dc_hf_model_new = Chemberta(task='regression', tokenizer_path=tokenizer_path, device='cpu', batch_size=2, learning_rate=0.0001)
     
-    # Load the model from the checkpoint using DeepChemLightningTrainer
-    reloaded_trainer = DeepChemLightningTrainer.load_checkpoint(
+    # Load the model from the checkpoint using LightningTorchModel
+    reloaded_trainer = LightningTorchModel.load_checkpoint(
         "model_checkpoint.ckpt", 
         model=dc_hf_model_new,
         batch_size=2,
@@ -362,12 +362,12 @@ def test_chemberta_overfit_with_lightning_trainer(smiles_data):
     
 
     # Create Lightning trainer
-    lightning_trainer = DeepChemLightningTrainer(
+    lightning_trainer = LightningTorchModel(
         model=dc_hf_model,
         batch_size=1,
         max_epochs=70,  # More epochs for overfitting
         accelerator="gpu",
-        strategy="ddp",
+        strategy="fsdp",
         devices=-1,
         logger=False,
         enable_progress_bar=False,
@@ -381,7 +381,7 @@ def test_chemberta_overfit_with_lightning_trainer(smiles_data):
         metrics=[mae_metric]
     )
 
-    lightning_trainer.fit(dataset)
+    lightning_trainer.fit(dataset, checkpoint_interval=0)
     
     # Save checkpoint after training
     lightning_trainer.save_checkpoint("chemberta_overfit_best.ckpt")
@@ -396,7 +396,7 @@ def test_chemberta_overfit_with_lightning_trainer(smiles_data):
     )
     
     # Load the checkpoint into the new model instance
-    reloaded_trainer = DeepChemLightningTrainer.load_checkpoint(
+    reloaded_trainer = LightningTorchModel.load_checkpoint(
         "chemberta_overfit_best.ckpt", model=new_dc_hf_model,
         batch_size=1,
         accelerator="gpu",
