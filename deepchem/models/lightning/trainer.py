@@ -12,12 +12,64 @@ from deepchem.models import Model
 import logging
 import numpy as np
 import os
+import glob
 import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint
 from rdkit import rdBase
 
 rdBase.DisableLog('rdApp.warning')
 logger = logging.getLogger(__name__)
+
+
+class RotatingModelCheckpoint(ModelCheckpoint):
+    """Custom ModelCheckpoint that implements proper rotation for step-based checkpoints.
+    
+    This extends Lightning's ModelCheckpoint to provide automatic rotation of checkpoints
+    based on creation time when using step-based saving without a monitor metric.
+    """
+    
+    def __init__(self, *args, **kwargs):
+        # Force save_top_k to -1 to save all checkpoints initially
+        self.actual_save_top_k = kwargs.pop('save_top_k', 2)
+        kwargs['save_top_k'] = -1  # Save all, we'll rotate manually
+        kwargs['monitor'] = None   # No metric monitoring
+        super().__init__(*args, **kwargs)
+    
+    def _save_checkpoint(self, trainer, filepath):
+        """Override to implement rotation after saving."""
+        # Save the checkpoint first
+        super()._save_checkpoint(trainer, filepath)
+        
+        # Then clean up old checkpoints if needed
+        self._rotate_checkpoints()
+    
+    def _rotate_checkpoints(self):
+        """Remove old checkpoints to maintain save_top_k limit."""
+        if self.actual_save_top_k <= 0 or not self.dirpath:
+            return
+            
+        try:
+            # Get all checkpoint files except last.ckpt
+            checkpoint_pattern = os.path.join(str(self.dirpath), "*.ckpt")
+            all_checkpoints = glob.glob(checkpoint_pattern)
+            regular_checkpoints = [f for f in all_checkpoints 
+                                 if not f.endswith("last.ckpt")]
+            
+            # Sort by modification time (newest first)
+            regular_checkpoints.sort(key=os.path.getmtime, reverse=True)
+            
+            # Remove old checkpoints if we have more than actual_save_top_k
+            if len(regular_checkpoints) > self.actual_save_top_k:
+                checkpoints_to_remove = regular_checkpoints[self.actual_save_top_k:]
+                for checkpoint_file in checkpoints_to_remove:
+                    try:
+                        os.remove(checkpoint_file)
+                        if self.verbose:
+                            logger.info(f"Removed old checkpoint: {os.path.basename(checkpoint_file)}")
+                    except OSError as e:
+                        logger.warning(f"Failed to remove checkpoint {checkpoint_file}: {e}")
+        except Exception as e:
+            logger.warning(f"Error during checkpoint rotation: {e}")
 
 
 class LightningTorchModel(Model):
@@ -111,8 +163,9 @@ class LightningTorchModel(Model):
         train_dataset: dc.data.Dataset
             DeepChem dataset for training.
         max_checkpoints_to_keep: int, default 2
-            The maximum number of checkpoints to keep. Older checkpoints are discarded.
-            This maps to Lightning's save_top_k parameter.
+            The maximum number of checkpoints to keep. Lightning doesn't provide
+            automatic rotation for step-based checkpoints, so we implement this
+            using a custom callback approach.
         checkpoint_interval: int, default 20
             The frequency at which to write checkpoints, measured in training steps.
             Set this to 0 to disable automatic checkpointing.
@@ -127,12 +180,12 @@ class LightningTorchModel(Model):
         
         # Add checkpoint callback if interval > 0
         if checkpoint_interval > 0:
-            checkpoint_callback = ModelCheckpoint(
+            # Use a custom rotating checkpoint callback
+            checkpoint_callback = RotatingModelCheckpoint(
                 dirpath=os.path.join(self.model_dir, "checkpoints"),
-                filename='{epoch}-{step}',
+                filename='{step}',
                 every_n_train_steps=checkpoint_interval,
                 save_top_k=max_checkpoints_to_keep,
-                monitor=None,  # No monitoring metric, just save based on steps
                 save_last=True,  # Always keep the last checkpoint
                 auto_insert_metric_name=False,
                 verbose=True
