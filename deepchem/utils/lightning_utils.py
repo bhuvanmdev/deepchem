@@ -1,6 +1,14 @@
 from typing import List, Tuple, Any
 import deepchem as dc
+import os
+import glob
+import logging
+try:
+    from lightning.pytorch.callbacks import ModelCheckpoint
+except ImportError:
+    pass
 
+logger = logging.getLogger(__name__)
 
 def collate_dataset_fn(batch_data: List[Tuple[Any, Any, Any, Any]], model):
     """Default Collate function for DeepChem datasets to work with PyTorch DataLoader.
@@ -69,3 +77,52 @@ def collate_dataset_fn(batch_data: List[Tuple[Any, Any, Any, Any]], model):
     processed_batch = next(
         iter(model.default_generator(dc.data.NumpyDataset(X, Y, W, ids))))
     return model._prepare_batch(processed_batch)
+
+
+class RotatingModelCheckpoint(ModelCheckpoint):
+    """Custom ModelCheckpoint that implements proper rotation for step-based checkpoints.
+    
+    This extends Lightning's ModelCheckpoint to provide automatic rotation of checkpoints
+    based on creation time when using step-based saving without a monitor metric.
+    """
+    
+    def __init__(self, *args, **kwargs):
+        # Force save_top_k to -1 to save all checkpoints initially
+        self.actual_save_top_k = kwargs.pop('save_top_k', 2)
+        kwargs['save_top_k'] = -1  # Save all, we'll rotate manually
+        kwargs['monitor'] = None   # No metric monitoring
+        super().__init__(*args, **kwargs)
+    
+    def _save_checkpoint(self, trainer, filepath):
+        """Override to implement rotation after saving."""
+        # Save the checkpoint first
+        super()._save_checkpoint(trainer, filepath)
+        
+        # Then clean up old checkpoints if needed
+        self._rotate_checkpoints()
+    
+    def _rotate_checkpoints(self):
+        """Remove old checkpoints to maintain save_top_k limit."""
+        if self.actual_save_top_k <= 0 or not self.dirpath:
+            return
+            
+        try:
+            # Get all checkpoint files except last.ckpt
+            checkpoint_pattern = os.path.join(str(self.dirpath), "*.ckpt")
+            all_checkpoints = glob.glob(checkpoint_pattern)
+            regular_checkpoints = [f for f in all_checkpoints 
+                                 if not f.endswith("last.ckpt")]
+            
+            # Sort by modification time (newest first)
+            regular_checkpoints.sort(key=os.path.getmtime, reverse=True)
+            
+            # Remove old checkpoints if we have more than actual_save_top_k
+            if len(regular_checkpoints) > self.actual_save_top_k:
+                checkpoints_to_remove = regular_checkpoints[self.actual_save_top_k:]
+                for checkpoint_file in checkpoints_to_remove:
+                    try:
+                        os.remove(checkpoint_file)
+                    except Exception as e:
+                        logger.warning(f"Failed to remove checkpoint {checkpoint_file}: {e}")
+        except Exception as e:
+            logger.warning(f"Error during checkpoint rotation: {e}")

@@ -208,10 +208,11 @@ def test_gcn_overfit_with_lightning_trainer():
         batch_size=10,
         accelerator="cuda",
         logger=False,
-        enable_progress_bar=False)
+        enable_progress_bar=False,
+        model_dir=".")
 
     scores_multi = lightning_trainer_pred.evaluate(dataset, [metric],
                                                    transformers)
-    os.remove("best_model.ckpt")
+    # os.remove("best_model.ckpt")
     assert scores_multi[
         "mean-roc_auc_score"] > 0.85, "Model did not learn anything during training."
