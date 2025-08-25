@@ -377,7 +377,7 @@ class LightningTorchModel(Model):
                         raise ValueError(f'No checkpoint found in {model_dir}')
                 else:
                     raise ValueError(f'Model directory {model_dir} does not exist')
-        
+        print(f"Restoring from checkpoint: {checkpoint}")
         # Load the checkpoint using Lightning's mechanism
         try:
             self.lightning_model = DCLightningModule.load_from_checkpoint(
