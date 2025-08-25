@@ -25,13 +25,13 @@ pytestmark = [
 
 
 @pytest.mark.torch
-def test_default_restore():
-    """Test restore method using automatic checkpoints created during fit()."""
+def test_manual_manual_save_restore():
+    """Test restore method using manual save_checkpoint and named restore."""
     L.seed_everything(42)
     tasks, datasets, _ = dc.molnet.load_clintox()
     _, valid_dataset, _ = datasets
 
-    # Create first model and trainer with automatic checkpointing
+    # Create first model and trainer
     model1 = dc.models.MultitaskClassifier(n_tasks=len(tasks),
                                            n_features=1024,
                                            layer_sizes=[1000],
@@ -43,13 +43,16 @@ def test_default_restore():
     # Use a specific model_dir for this test to avoid conflicts
     trainer1 = LightningTorchModel(model=model1,
                                    batch_size=16,
-                                   model_dir="test_default_restore_dir",
                                    accelerator="cuda",
                                    devices=-1,
-                                   log_every_n_steps=1)
+                                   log_every_n_steps=1,
+                                   enable_checkpointing=False,
+                                   )
 
-    # Train first model - this will automatically create checkpoints
-    trainer1.fit(valid_dataset, nb_epoch=3, checkpoint_interval=20)
+    # Train first model
+    trainer1.fit(valid_dataset, nb_epoch=3)
+
+    trainer1.save_checkpoint(model_dir="test_dir")
 
     y1 = trainer1.predict(valid_dataset)
     
@@ -64,12 +67,12 @@ def test_default_restore():
 
     trainer2 = LightningTorchModel(model=model2,
                                    batch_size=16,
-                                   model_dir="test_default_restore_dir",
+                                   model_dir="test_dir",
                                    accelerator="cuda",
                                    devices=-1,
                                    log_every_n_steps=1)
 
-    # Restore from automatic checkpoint (should find last.ckpt in checkpoints dir)
+    # Restore from specific checkpoint name
     trainer2.restore()
 
     # Now they should produce similar results
@@ -77,8 +80,11 @@ def test_default_restore():
     assert np.allclose(y1, y2, atol=1e-3)
 
     # Clean up
-    if os.path.exists("test_default_restore_dir"):
-        shutil.rmtree("test_default_restore_dir")
+    try:
+        if os.path.exists("test_dir"):
+            shutil.rmtree("test_dir")
+    except:
+        pass  # Ignore cleanup errors
 
 @pytest.mark.torch
 def test_multitask_classifier_restore_correctness():
@@ -127,10 +133,11 @@ def test_multitask_classifier_restore_correctness():
     # Restore from checkpoint
     trainer2.restore()
 
+    _ = trainer2.predict(valid_dataset)
+
+    print("Weights from original model:", _.shape, valid_dataset.y.shape)
     # get a some 10 weights for assertion
     reloaded_weights = trainer2.model.model.layers[0].weight[:10].detach().cpu().numpy()
-
-    _ = trainer2.predict(valid_dataset)
 
     # make it equal with a tolerance of 1e-5
     assert torch.allclose(torch.tensor(weights),
@@ -138,8 +145,11 @@ def test_multitask_classifier_restore_correctness():
                           atol=1e-5)
 
     # Clean up
-    if os.path.exists("test_multitask_restore_dir"):
-        shutil.rmtree("test_multitask_restore_dir")
+    try:
+        if os.path.exists("test_multitask_restore_dir"):
+            shutil.rmtree("test_multitask_restore_dir")
+    except:
+        pass  # Ignore cleanup errors
 
 
 @pytest.mark.torch
@@ -188,11 +198,10 @@ def test_gcn_model_restore_correctness():
     # Restore from checkpoint - look for checkpoint1.ckpt in model_dir
     trainer2.restore()
 
+    _ = trainer2.predict(valid_dataset)
     # get a some 10 weights for assertion
     reloaded_weights = trainer2.model.model.model.gnn.gnn_layers[
         0].res_connection.weight[:10].detach().cpu().numpy()
-
-    _ = trainer2.predict(valid_dataset)
 
     # make it equal with a tolerance of 1e-5
     assert torch.allclose(torch.tensor(weights),
@@ -200,8 +209,11 @@ def test_gcn_model_restore_correctness():
                           atol=1e-5)
 
     # Clean up
-    if os.path.exists("test_gcn_restore_dir"):
-        shutil.rmtree("test_gcn_restore_dir")
+    try:
+        if os.path.exists("test_gcn_restore_dir"):
+            shutil.rmtree("test_gcn_restore_dir")
+    except:
+        pass  # Ignore cleanup errors
 
 
 @pytest.mark.torch
@@ -270,6 +282,7 @@ def test_gcn_overfit_with_lightning_trainer():
         model_dir=lightning_trainer.model_dir,
         accelerator="cuda",
         logger=False,
+        devices=1,
         enable_progress_bar=False)
     
     lightning_trainer_pred.restore()
@@ -279,3 +292,11 @@ def test_gcn_overfit_with_lightning_trainer():
     
     assert scores_multi[
         "mean-roc_auc_score"] > 0.85, "Model did not learn anything during training."
+
+    try:
+        if os.path.exists(lightning_trainer.model_dir):
+            shutil.rmtree(lightning_trainer.model_dir)
+    except:
+        pass  # Ignore cleanup errors
+    
+

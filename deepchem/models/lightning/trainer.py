@@ -237,8 +237,6 @@ class LightningTorchModel(Model):
         List
             Predictions from the model.
         """
-        # Keep the device count 1 for prediction to ensure consistency during inference/evaluation.
-        self.trainer_kwargs['devices'] = 1
 
         self.trainer = L.Trainer(**self.trainer_kwargs)
 
@@ -335,8 +333,8 @@ class LightningTorchModel(Model):
         while using Lightning's native checkpointing mechanism.
 
         **Important Note for FSDP Users**: When using FSDP (Fully Sharded Data Parallel)
-        training strategy, restoring weights on the same trainer instance after fitting 
-        can cause shape-mismatch errors due to how FSDP handles model sharding. 
+        training strategy, restoring weights on the same trainer instance after fitting,
+        for prediction can cause shape-mismatch errors due to how FSDP handles model sharding. 
         **It is strongly recommended to create a new LightningTorchModel instance** 
         instead of calling restore() on an existing trained instance when using FSDP.
 
@@ -364,29 +362,21 @@ class LightningTorchModel(Model):
                 model_dir = self.model_dir
             
             # Check for last.ckpt in checkpoints subdirectory
-            checkpoint_path = os.path.join(model_dir, "checkpoints", "last.ckpt")
+            checkpoints_dir = os.path.join(model_dir, "checkpoints")
+            checkpoint_path = os.path.join(checkpoints_dir, "last.ckpt")
             if os.path.exists(checkpoint_path):
                 checkpoint = checkpoint_path
             else:
                 # Look for any .ckpt file in the model directory
-                if os.path.exists(model_dir):
-                    ckpt_files = [f for f in os.listdir(model_dir) if f.endswith('.ckpt')]
+                if os.path.exists(checkpoints_dir):
+                    ckpt_files = [f for f in os.listdir(checkpoints_dir) if f.endswith('.ckpt')]
                     if ckpt_files:
-                        checkpoint = os.path.join(model_dir, sorted(ckpt_files)[0])
+                        checkpoint = os.path.join(checkpoints_dir, sorted(ckpt_files)[0])
                     else:
-                        raise ValueError(f'No checkpoint found in {model_dir}')
+                        raise ValueError(f'No checkpoint found in {checkpoints_dir}')
                 else:
-                    raise ValueError(f'Model directory {model_dir} does not exist')
-        
+                    raise ValueError(f'Model directory {checkpoints_dir} does not exist')
+        print(f"Restoring from checkpoint: {checkpoint}")
         # Load the checkpoint using Lightning's mechanism
-        try:
-            self.lightning_model = DCLightningModule.load_from_checkpoint(
-                checkpoint, dc_model=self.model, strict=strict)
-        except Exception as e:
-            if "fsdp" in str(e).lower() or "sharded" in str(e).lower():
-                raise RuntimeError(
-                    "Restoring on the same instance with FSDP can cause shape-mismatch errors. "
-                    "Please create a new LightningTorchModel instance instead before restoring. "
-                    f"Original error: {e}"
-                )
-            raise e
+        self.lightning_model = DCLightningModule.load_from_checkpoint(
+            checkpoint, dc_model=self.model, strict=strict)
