@@ -25,7 +25,7 @@ pytestmark = [
 
 
 @pytest.mark.torch
-def test_manual_manual_save_restore():
+def test_manual_save_restore():
     """Test restore method using manual save_checkpoint and named restore."""
     L.seed_everything(42)
     tasks, datasets, _ = dc.molnet.load_clintox()
@@ -46,11 +46,10 @@ def test_manual_manual_save_restore():
                                    accelerator="cuda",
                                    devices=-1,
                                    log_every_n_steps=1,
-                                   enable_checkpointing=False,
                                    )
 
     # Train first model
-    trainer1.fit(valid_dataset, nb_epoch=3)
+    trainer1.fit(valid_dataset, nb_epoch=3, checkpoint_interval=0)
 
     trainer1.save_checkpoint(model_dir="test_dir")
 
@@ -109,9 +108,9 @@ def test_multitask_classifier_restore_correctness():
                                   strategy="fsdp")
 
     trainer.fit(valid_dataset, nb_epoch=3)
-    # get a some 10 weights for assertion
-    weights = trainer.model.model.layers[0].weight[:10].detach().cpu().numpy()
-
+    
+    # Store original model state dictionary for comparison
+    original_state_dict = trainer.model.model.state_dict()
 
     # Create new model and trainer instance
     restore_model = dc.models.MultitaskClassifier(n_tasks=len(tasks),
@@ -133,23 +132,29 @@ def test_multitask_classifier_restore_correctness():
     # Restore from checkpoint
     trainer2.restore()
 
+    # Run prediction to ensure model is properly loaded
     _ = trainer2.predict(valid_dataset)
 
-    print("Weights from original model:", _.shape, valid_dataset.y.shape)
-    # get a some 10 weights for assertion
-    reloaded_weights = trainer2.model.model.layers[0].weight[:10].detach().cpu().numpy()
+    # Get restored model state dictionary for comparison
+    restored_state_dict = trainer2.model.model.state_dict()
 
-    # make it equal with a tolerance of 1e-5
-    assert torch.allclose(torch.tensor(weights),
-                          torch.tensor(reloaded_weights),
-                          atol=1e-5)
+    # Verify that the restored state dict has the same keys
+    assert original_state_dict.keys() == restored_state_dict.keys()
+
+    # Verify that the restored weights are identical to the original weights
+    for key in original_state_dict:
+        torch.testing.assert_close(
+            original_state_dict[key].detach().cpu(),
+            restored_state_dict[key].detach().cpu(),
+            msg=f"Weight mismatch for key {key} after restore operation."
+        )
 
     # Clean up
     try:
         if os.path.exists("test_multitask_restore_dir"):
             shutil.rmtree("test_multitask_restore_dir")
     except:
-        pass  # Ignore cleanup errors
+        pass  # Ignore cleanup errors caused by file locks
 
 
 @pytest.mark.torch
@@ -175,10 +180,8 @@ def test_gcn_model_restore_correctness():
 
     trainer.fit(valid_dataset, nb_epoch=3)
 
-    # get a some 10 weights for assertion
-    weights = trainer.model.model.model.gnn.gnn_layers[
-        0].res_connection.weight[:10].detach().cpu().numpy()
-
+    # Store original model state dictionary for comparison
+    original_state_dict = trainer.model.model.state_dict()
 
     # Create new model and trainer instance
     restore_model = dc.models.GCNModel(mode='classification',
@@ -198,26 +201,32 @@ def test_gcn_model_restore_correctness():
     # Restore from checkpoint - look for checkpoint1.ckpt in model_dir
     trainer2.restore()
 
+    # Run prediction to ensure model is properly loaded
     _ = trainer2.predict(valid_dataset)
-    # get a some 10 weights for assertion
-    reloaded_weights = trainer2.model.model.model.gnn.gnn_layers[
-        0].res_connection.weight[:10].detach().cpu().numpy()
+    
+    # Get restored model state dictionary for comparison
+    restored_state_dict = trainer2.model.model.state_dict()
 
-    # make it equal with a tolerance of 1e-5
-    assert torch.allclose(torch.tensor(weights),
-                          torch.tensor(reloaded_weights),
-                          atol=1e-5)
+    # Verify that the restored state dict has the same keys
+    assert original_state_dict.keys() == restored_state_dict.keys()
+
+    # Verify that the restored weights are identical to the original weights
+    for key in original_state_dict:
+        torch.testing.assert_close(
+            original_state_dict[key].detach().cpu(),
+            restored_state_dict[key].detach().cpu(),
+            msg=f"Weight mismatch for key {key} after restore operation."
+        )
 
     # Clean up
     try:
         if os.path.exists("test_gcn_restore_dir"):
             shutil.rmtree("test_gcn_restore_dir")
     except:
-        pass  # Ignore cleanup errors
-
+        pass  # Ignore cleanup errors caused by file locks
 
 @pytest.mark.torch
-def test_gcn_overfit_with_lightning_trainer():
+def test_gcn_model_overfit_and_checkpointing():
     """
     Tests if the GCN model can overfit to a small dataset using Lightning trainer.
     This validates that the Lightning training loop works correctly and the model

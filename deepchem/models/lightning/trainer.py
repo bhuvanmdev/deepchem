@@ -60,7 +60,7 @@ class LightningTorchModel(Model):
             - enable_checkpointing: bool, default True
                 Whether to enable automatic checkpointing.
             - fast_dev_run: bool or int, default False
-                Run a fast development run with limited batches for debugging.
+                Run a fast development run with limited batches, epochs and no checkpointing for debugging.
             For all available options, see: https://lightning.ai/docs/pytorch/stable/common/trainer.html#init
 
         Examples
@@ -278,27 +278,25 @@ class LightningTorchModel(Model):
         """Save a checkpoint to disk.
 
         Usually you do not need to call this method, since fit() saves checkpoints
-        automatically.  If you have disabled automatic checkpointing during fitting,
+        automatically. If you have disabled automatic checkpointing during fitting,
         this can be called to manually write checkpoints.
 
         This method maintains compatibility with TorchModel's save_checkpoint interface
-        while using Lightning's native checkpointing mechanism and follows the same
-        file convention as ModelCheckpoint callback.
-
-        Note: The max_checkpoints_to_keep parameter greater than 1 does not play any
-        significant role, since we use model callbacks for checkpoint saving. It is
-        kept with the same name just to follow the deepchem convention.
-                        
+        while using Lightning's native checkpointing mechanism.
 
         Parameters
         ----------
-        max_checkpoints_to_keep: int, default 1
+        max_checkpoints_to_keep : int, default 1
             The maximum number of checkpoints to keep. Older checkpoints are discarded.
-            Note: Values greater than 1 are maintained for API compatibility but do not
-            affect the actual checkpoint management when using Lightning callbacks.
-        model_dir: str, default None
+        model_dir : str, default None
             Model directory to save checkpoint to. If None, reverts to self.model_dir.
             Checkpoints will be saved in a 'checkpoints' subdirectory within this path.
+        
+        Notes
+        -----
+        The `max_checkpoints_to_keep` parameter greater than `1` does not play any
+        significant role here, since we use modelcheckpoint callbacks from lightning for dynamic checkpoint 
+        saving. It is kept with the same name and type just to follow the deepchem's convention.
         """
         if max_checkpoints_to_keep == 0:
             return
@@ -333,8 +331,8 @@ class LightningTorchModel(Model):
         while using Lightning's native checkpointing mechanism.
 
         **Important Note for FSDP Users**: When using FSDP (Fully Sharded Data Parallel)
-        training strategy, restoring weights on the same trainer instance after fitting,
-        for prediction can cause shape-mismatch errors due to how FSDP handles model sharding. 
+        training strategy, restoring weights on the same trainer instance after fitting
+        for prediction, can cause shape-mismatch errors due to how FSDP handles model sharding. 
         **It is strongly recommended to create a new LightningTorchModel instance** 
         instead of calling restore() on an existing trained instance when using FSDP.
 
@@ -347,13 +345,9 @@ class LightningTorchModel(Model):
             Directory to restore checkpoint from. If None, use self.model_dir.  If
             checkpoint is not None, this is ignored.
         strict: bool, default True
-            Whether or not to strictly enforce that the keys in checkpoint match
-            the keys returned by this model's get_variable_scope() method.
-            Note: This parameter is maintained for API compatibility but may not 
-            be fully supported in Lightning's checkpoint loading mechanism.
+            Whether to strictly enforce that the keys in the checkpoint, match the keys
+            returned by this module's state dict.
         """
-        import logging
-        logger = logging.getLogger(__name__)
         logger.info('Restoring model')
         
         if checkpoint is None:
@@ -376,7 +370,7 @@ class LightningTorchModel(Model):
                         raise ValueError(f'No checkpoint found in {checkpoints_dir}')
                 else:
                     raise ValueError(f'Model directory {checkpoints_dir} does not exist')
-        print(f"Restoring from checkpoint: {checkpoint}")
+
         # Load the checkpoint using Lightning's mechanism
         self.lightning_model = DCLightningModule.load_from_checkpoint(
             checkpoint, dc_model=self.model, strict=strict)
