@@ -86,10 +86,7 @@ class LightningTorchModel(Model):
         ...     fast_dev_run=True
         ... )
         >>> # Train with custom checkpoint settings
-        >>> # trainer.fit(valid_dataset,
-        ... #             nb_epoch=30,
-        ... #             max_checkpoints_to_keep=3,
-        ... #             checkpoint_interval=1000)
+        >>> # trainer.fit(valid_dataset, nb_epoch=3)
         >>> # predictions = trainer.predict(valid_dataset)
         >>> # To restore from checkpoint:
         >>> # trainer.restore()
