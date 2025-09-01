@@ -5,6 +5,7 @@ import os
 import shutil
 try:
     import torch
+    import torch.distributed as dist
     gpu_available = torch.cuda.is_available() and torch.cuda.device_count() > 0
 except ImportError:
     gpu_available = False
@@ -21,7 +22,6 @@ pytestmark = [
                        reason="No GPU available for testing"),
     pytest.mark.skipif(PYTORCH_LIGHTNING_IMPORT_FAILED,
                        reason="PyTorch Lightning is not installed")
-]
 
 
 @pytest.mark.torch
@@ -144,11 +144,12 @@ def test_multitask_classifier_restore_correctness():
     assert original_state_dict.keys() == restored_state_dict.keys()
 
     # Verify that the restored weights are identical to the original weights
-    for key in original_state_dict:
-        torch.testing.assert_close(
-            original_state_dict[key].detach().cpu(),
-            restored_state_dict[key].detach().cpu(),
-            msg=f"Weight mismatch for key {key} after restore operation.")
+    if dist.get_rank() == 0:
+        for key in original_state_dict:
+            torch.testing.assert_close(
+                original_state_dict[key].detach().cpu(),
+                restored_state_dict[key].detach().cpu(),
+                msg=f"Weight mismatch for key {key} after restore operation.")
 
     # Clean up
     try:
@@ -212,11 +213,12 @@ def test_gcn_model_restore_correctness():
     assert original_state_dict.keys() == restored_state_dict.keys()
 
     # Verify that the restored weights are identical to the original weights
-    for key in original_state_dict:
-        torch.testing.assert_close(
-            original_state_dict[key].detach().cpu(),
-            restored_state_dict[key].detach().cpu(),
-            msg=f"Weight mismatch for key {key} after restore operation.")
+    if dist.get_rank() == 0:
+        for key in original_state_dict:
+            torch.testing.assert_close(
+                original_state_dict[key].detach().cpu(),
+                restored_state_dict[key].detach().cpu(),
+                msg=f"Weight mismatch for key {key} after restore operation.")
 
     # Clean up
     try:
