@@ -307,7 +307,7 @@ class LightningTorchModel(Model):
 
         # Check if trainer has been initialized
         if not hasattr(self, 'trainer') or self.trainer is None:
-            raise RuntimeError(
+            raise RuntimeError( 
                 "Trainer has not been initialized. Please call fit() or predict() "
                 "before attempting to save a checkpoint manually.")
 
