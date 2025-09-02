@@ -178,7 +178,7 @@ class LightningTorchModel(Model):
                 save_top_k=max_checkpoints_to_keep,
                 save_last=True,  # Always keep the last checkpoint
                 auto_insert_metric_name=False,
-                verbose=True)
+                save_on_train_epoch_end=False)
             callbacks_list.append(checkpoint_callback)
 
         # Check if trainer already has callbacks from trainer_kwargs
