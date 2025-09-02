@@ -4,6 +4,7 @@ import deepchem as dc
 from deepchem.data import DiskDataset
 from copy import deepcopy
 import os
+import shutil
 try:
     import torch
     gpu_available = torch.cuda.is_available() and torch.cuda.device_count() > 1
@@ -81,15 +82,11 @@ def test_chemberta_masked_lm_workflow(smiles_data):
         devices=-1,  # Use all available GPUs
         strategy="fsdp",
         logger=False,
-        enable_checkpointing=False,
         enable_progress_bar=False,
-        fast_dev_run=True,
     )
 
     # Test MLM training
     trainer.fit(train_dataset=dataset, checkpoint_interval=0, nb_epoch=1)
-
-    trainer.save("chemberta_mlm_checkpoint.ckpt")
 
     # Create a new model instance for loading
     new_dc_hf_model = Chemberta(task='mlm',
@@ -99,14 +96,13 @@ def test_chemberta_masked_lm_workflow(smiles_data):
                                 learning_rate=0.0001)
 
     # Load the checkpoint into the new model instance
-    reloaded_trainer = LightningTorchModel.reload(
-        "chemberta_mlm_checkpoint.ckpt",
+    reloaded_trainer = LightningTorchModel(
         model=new_dc_hf_model,
         batch_size=2,
         accelerator="gpu",
         devices=1,
     )
-
+    reloaded_trainer.restore()
     # Test MLM prediction using the reloaded trainer
     prediction_batches = reloaded_trainer.predict(dataset=dataset,
                                                   num_workers=0)
@@ -118,6 +114,13 @@ def test_chemberta_masked_lm_workflow(smiles_data):
     if prediction_batches and prediction_batches[0] is not None:
         predictions = prediction_batches[0]
         assert isinstance(predictions, np.ndarray)
+    
+    try:
+        if os.path.exists(reloaded_trainer.model_dir):
+            shutil.rmtree(reloaded_trainer.model_dir)
+    except:
+        pass  # Ignore cleanup errors caused by file locks
+
 
 
 @pytest.mark.torch
@@ -139,9 +142,7 @@ def test_chemberta_regression_workflow(smiles_data):
         devices=-1,
         strategy="fsdp",
         logger=False,
-        enable_checkpointing=False,
         enable_progress_bar=False,
-        fast_dev_run=True,
     )
 
     # Test regression training
@@ -149,7 +150,7 @@ def test_chemberta_regression_workflow(smiles_data):
                 num_workers=4,
                 checkpoint_interval=0,
                 nb_epoch=1)
-    trainer.save("chemberta_reg_checkpoint.ckpt")
+    trainer.save_checkpoint(max_checkpoints_to_keep=1, model_dir=".")
 
     # Create a new model instance for loading
     new_dc_hf_model = Chemberta(task='regression',
@@ -159,13 +160,13 @@ def test_chemberta_regression_workflow(smiles_data):
                                 learning_rate=0.0001)
 
     # Load the checkpoint into the new model instance
-    reloaded_trainer = LightningTorchModel.reload(
-        "chemberta_reg_checkpoint.ckpt",
+    reloaded_trainer = LightningTorchModel(
         model=new_dc_hf_model,
         batch_size=2,
         accelerator="gpu",
         devices=1,
     )
+    reloaded_trainer.restore()
 
     # Test regression prediction using the reloaded trainer
     prediction = reloaded_trainer.predict(dataset=dataset)
@@ -177,6 +178,13 @@ def test_chemberta_regression_workflow(smiles_data):
 
     # For regression, predictions should match the number of samples and tasks
     assert predictions.shape == (16,)  # single regression task
+
+    try:
+        if os.path.exists(reloaded_trainer.model_dir):
+            shutil.rmtree(reloaded_trainer.model_dir)
+    except:
+        pass  # Ignore cleanup errors caused by file locks
+
 
 
 @pytest.mark.torch
@@ -211,19 +219,14 @@ def test_chemberta_classification_workflow(smiles_data, tmp_path):
         devices=-1,
         strategy="fsdp",
         logger=False,
-        enable_checkpointing=False,
         enable_progress_bar=False,
-        fast_dev_run=True,
-        precision="16-mixed",
     )
 
     # Test classification training
     trainer.fit(train_dataset=classification_dataset,
-                num_workers=4,
-                checkpoint_interval=0,
                 nb_epoch=1)
 
-    trainer.save("chemberta_classification_checkpoint.ckpt")
+    # trainer.save_checkpoint(max_checkpoints_to_keep=1, model_dir=".")
 
     # Create a new model instance for loading
     new_dc_hf_model = Chemberta(task='classification',
@@ -233,13 +236,13 @@ def test_chemberta_classification_workflow(smiles_data, tmp_path):
                                 learning_rate=0.0001)
 
     # Load the checkpoint into the new model instance
-    reloaded_trainer = LightningTorchModel.reload(
-        "chemberta_classification_checkpoint.ckpt",
+    reloaded_trainer = LightningTorchModel(
         model=new_dc_hf_model,
         batch_size=2,
         accelerator="gpu",
         devices=1,
     )
+    reloaded_trainer.restore()
 
     # Test classification prediction using the reloaded trainer
     prediction = reloaded_trainer.predict(dataset=classification_dataset)
@@ -250,6 +253,13 @@ def test_chemberta_classification_workflow(smiles_data, tmp_path):
 
     # For binary classification, predictions should be probabilities for 2 classes
     assert prediction.shape[1] == 2  # binary classification probabilities
+
+    try:
+        if os.path.exists(reloaded_trainer.model_dir):
+            shutil.rmtree(reloaded_trainer.model_dir)
+    except:
+        pass  # Ignore cleanup errors caused by file locks
+
 
 
 @pytest.mark.torch
@@ -272,7 +282,6 @@ def test_chemberta_checkpointing_and_loading(smiles_data):
         devices=-1,
         enable_progress_bar=False,
         logger=False,
-        enable_checkpointing=False,
     )
 
     # Store model state before training for comparison
@@ -297,7 +306,7 @@ def test_chemberta_checkpointing_and_loading(smiles_data):
             break
     assert weight_changed, "Model weights did not change (no training occurred)."
 
-    trainer.save("model_checkpoint.ckpt")
+    # trainer.save_checkpoint(max_checkpoints_to_keep=1, model_dir=".")
 
     # Create a new model instance for loading
     dc_hf_model_new = Chemberta(task='regression',
@@ -307,13 +316,14 @@ def test_chemberta_checkpointing_and_loading(smiles_data):
                                 learning_rate=0.0001)
 
     # Load the model from the checkpoint using LightningTorchModel
-    reloaded_trainer = LightningTorchModel.reload("model_checkpoint.ckpt",
-                                                  model=dc_hf_model_new,
-                                                  batch_size=2,
-                                                  accelerator="gpu",
-                                                  devices=-1,
-                                                  logger=False,
-                                                  enable_progress_bar=False)
+    reloaded_trainer = LightningTorchModel(
+        model=dc_hf_model_new,
+        batch_size=2,
+        accelerator="gpu",
+        devices=-1,
+        logger=False,
+        enable_progress_bar=False)
+    reloaded_trainer.restore()
     state_reloaded = reloaded_trainer.lightning_model.pt_model.state_dict()
 
     # --- Correctness Check 2: After Loading ---
@@ -341,6 +351,13 @@ def test_chemberta_checkpointing_and_loading(smiles_data):
         rtol=1e-4,
         atol=1e-6)
 
+    try:
+        if os.path.exists(reloaded_trainer.model_dir):
+            shutil.rmtree(reloaded_trainer.model_dir)
+    except:
+        pass  # Ignore cleanup errors caused by file locks
+
+
 
 @pytest.mark.torch
 def test_chemberta_overfit_with_lightning_trainer(smiles_data):
@@ -367,38 +384,46 @@ def test_chemberta_overfit_with_lightning_trainer(smiles_data):
         devices=-1,
         logger=False,
         enable_progress_bar=False,
-        enable_checkpointing=False,
         precision="16-mixed",
     )
 
     eval_before = dc_hf_model.evaluate(dataset=dataset, metrics=[mae_metric])
 
-    lightning_trainer.fit(dataset, checkpoint_interval=0, nb_epoch=70)
+    lightning_trainer.fit(dataset, nb_epoch=70)
 
     # Save checkpoint after training
-    lightning_trainer.save("chemberta_overfit_best.ckpt")
+    # lightning_trainer.save_checkpoint(max_checkpoints_to_keep=1, model_dir=".")
 
-    new_dc_hf_model = Chemberta(
+    reloaded_trainer = Chemberta(
         task='regression',
         tokenizer_path=tokenizer_path,
         device='cpu',
         batch_size=1,  # Match model batch size
         learning_rate=0.0005)
 
-    # Load the checkpoint into the new model instance
-    reloaded_trainer = LightningTorchModel.reload(
-        "chemberta_overfit_best.ckpt",
-        model=new_dc_hf_model,
-        batch_size=1,
-        accelerator="gpu",
-        devices=1,
-        logger=False,
-        enable_progress_bar=False,
-    )
+    reloaded_trainer.restore(os.path.join(lightning_trainer.model_dir, "checkpoints",'last.ckpt'), strict=False)
 
+    # Load the checkpoint into the new model instance
+    # reloaded_trainer = LightningTorchModel(
+    #     model=new_dc_hf_model,
+    #     batch_size=1,
+    #     accelerator="gpu",
+    #     devices=1,
+    #     logger=False,
+    #     enable_progress_bar=False,
+    # )
+
+    # reloaded_trainer.restore()
     # Evaluate the model on the training set
     eval_score = reloaded_trainer.evaluate(dataset=dataset,
                                            metrics=[mae_metric])
     # If the model overfits the mae score should be significantly lower than before training
     assert eval_before[mae_metric.name] > eval_score[
         mae_metric.name] * 2, "Model did not overfit as expected"
+
+    try:
+        if os.path.exists(lightning_trainer.model_dir):
+            shutil.rmtree(lightning_trainer.model_dir)
+    except:
+        pass  # Ignore cleanup errors caused by file locks
+
