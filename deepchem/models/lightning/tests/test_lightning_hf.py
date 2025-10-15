@@ -362,8 +362,6 @@ def test_chemberta_overfit_with_lightning_trainer(smiles_data):
         batch_size=1,  # Smaller batch size to ensure all samples are processed
         learning_rate=0.0005)
 
-    eval_before = dc_hf_model.evaluate(dataset=dataset, metrics=[mae_metric])
-
     # Create Lightning trainer
     lightning_trainer = LightningTorchModel(
         model=dc_hf_model,
@@ -390,6 +388,9 @@ def test_chemberta_overfit_with_lightning_trainer(smiles_data):
         device='cpu',
         batch_size=1,  # Match model batch size
         learning_rate=0.0005)
+
+    eval_before = new_dc_hf_model.evaluate(dataset=dataset,
+                                           metrics=[mae_metric])
 
     # Load the checkpoint into the new model instance
     reloaded_trainer = LightningTorchModel(
