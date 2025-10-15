@@ -311,12 +311,12 @@ def test_chemberta_checkpointing_and_loading(smiles_data):
 
     # Load the model from the checkpoint using LightningTorchModel
     reloaded_trainer = LightningTorchModel(model=dc_hf_model_new,
-                                          batch_size=2,
-                                          model_dir="model_checkpoint",
-                                          accelerator="gpu",
-                                          devices=-1,
-                                          logger=False,
-                                          enable_progress_bar=False)
+                                           batch_size=2,
+                                           model_dir="model_checkpoint",
+                                           accelerator="gpu",
+                                           devices=-1,
+                                           logger=False,
+                                           enable_progress_bar=False)
     reloaded_trainer.restore()
     state_reloaded = reloaded_trainer.lightning_model.pt_model.state_dict()
 
@@ -362,6 +362,8 @@ def test_chemberta_overfit_with_lightning_trainer(smiles_data):
         batch_size=1,  # Smaller batch size to ensure all samples are processed
         learning_rate=0.0005)
 
+    eval_before = dc_hf_model.evaluate(dataset=dataset, metrics=[mae_metric])
+
     # Create Lightning trainer
     lightning_trainer = LightningTorchModel(
         model=dc_hf_model,
@@ -375,9 +377,9 @@ def test_chemberta_overfit_with_lightning_trainer(smiles_data):
         precision="16-mixed",
     )
 
-    eval_before = dc_hf_model.evaluate(dataset=dataset, metrics=[mae_metric])
-
-    lightning_trainer.fit(train_dataset=dataset, checkpoint_interval=0, nb_epoch=70)
+    lightning_trainer.fit(train_dataset=dataset,
+                          checkpoint_interval=0,
+                          nb_epoch=70)
 
     # Save checkpoint after training
     lightning_trainer.save_checkpoint(model_dir="chemberta_overfit_best")
